@@ -29,7 +29,7 @@ library(MASS)
 library(bootstrap)
 ```
 
-### ENLACE A GITHUB: 
+### ENLACE A GITHUB: *https://github.com/jlopezgaldon/prediction/blob/main/CP01/CP01_v1.Rmd*
 
 ___
 
