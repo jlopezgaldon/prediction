@@ -1,0 +1,655 @@
+---
+title: "CP01"
+author: "Jose López Galdón"
+date: "28/10/2020"
+output:
+  prettydoc::html_pretty:
+    theme: cayman
+    highlight: github
+---
+
+```{r setup, include = FALSE, warning = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+___
+
+```{r library, include = FALSE}
+# CARGAMOS LAS LIBRERÍAS
+library(readr)
+library(dplyr)
+library(corrplot)
+library(fBasics)
+library(akima)
+library(car)
+library(gvlma)
+library(leaps)
+library(forecast)
+library(MASS)
+library(bootstrap)
+```
+
+### ENLACE A GITHUB: 
+
+___
+
+## CARGAMOS LOS DATOS
+
+```{r load_data, include = FALSE}
+data_nba <- read_csv("data/01_raw/nba.csv")
+```
+
+Visualizamos los datos.
+
+```{r view_data}
+data_nba
+```
+
+___
+
+## LIMPIEZA DEL DATASET
+
+### Duplicados
+
+Comenzamos analizando los valores duplicados, para posteriormente eliminarlos.
+
+```{r duplicated_players}
+# Observamos que cuantos valores duplicados tenemos
+nrow(data_nba[duplicated(data_nba$Player), ])
+```
+
+En este caso tenemos 2 jugadores repetidos.
+
+```{r delete_duplicated_data}
+# Para eliminar los jugadores repetidos:
+data_nba <- data_nba[!duplicated(data_nba$Player), ]
+data_nba
+```
+
+Ahora ya tenemos el dataset sin valores repetidos.
+
+### Valores nulos
+
+A continuación, contaremos los valores nulos para ver si tenemos en el dataset:
+
+```{r nulls}
+summarise_all(data_nba, funs(sum(is.na(.))))
+```
+
+Como podemos observar tenemos varios valores nulos en algunas de las columnas. Probaremos eliminandolos.
+
+```{r omit_na}
+data_nba <- na.omit(data_nba)
+
+summarise_all(data_nba, funs(sum(is.na(.))))
+
+```
+
+Como podemos observar ya no existen valores null en ninguna de las columnas.
+
+
+### Renombrar columnas
+
+El problema que tenemos, es que los nombres de las columnas no tienen el formato adecuado, esto es porque presentas símbolos como %. Por lo que cambiaremos los nombres a minusculas y sustituiremos dichos símbolos.
+
+```{r rename_columns}
+# Cambiamos los nombres de las variables a minusculas y sustituimos los % por ""
+data_nba <- rename_with(data_nba, ~ tolower(gsub("%", "", .x, fixed = TRUE)))
+
+# Cambiamos el 3par por triplepar
+data_nba <- rename_with(data_nba, ~ (gsub("3", "triple", .x, fixed = TRUE)))
+
+# Cambiamos el ws/48 por ws48
+data_nba <- rename_with(data_nba, ~ (gsub("/", "_", .x, fixed = TRUE)))
+
+# Comprobamos el dataset
+data_nba
+```
+
+Ahora ya tenemos el dataset listo para trabajar con el.
+
+
+___
+
+## DICCIONARIO DE VARIABLES
+
+- player: Nombre del jugador.
+
+- salary: Salario en dolares.
+
+- nba_country: NAcionalidad del jugador.
+
+- nba_draftnumber: Posición del draft.
+
+- age: Edad del jugador.
+
+- tm: Abreviatura del nombre.
+
+- g: Partidos jugados.
+
+- mp: Minutos jugados.
+
+- per: Índice de eficiencia del jugador. El promedio de la liga es 15.
+
+- ts = Porcentaje de tiro real. Tiene en cuenta los tiros de 2 puntos, los triples y los tiros libres.
+                                        
+- tmp: Minutos jugados por el equipo.
+                                        
+- triplepar: Porcentaje de triples.
+                                        
+- ftr: Porcentaje de tiros libres.
+                                        
+- orb: Porcentaje de rebotes ofensivos.
+
+- drb: Porcentaje de rebote defensivo.
+
+- trb: Porcentaje de rebote total.
+
+- ast: Porcentaje de asistencia.
+
+- stl: Porcentaje de robo.
+
+- blk: Porcentaje de tapones.
+
+- tov: Porcentaje de robo de balón antes de que el equipo contrario tire.
+
+- usg: Porcentaje de jugadas que estuvo involucrado un jugador, siempre que la jugada termine en uno de los tres resultados reales: intento de gol de campo, intento de tiro libre o pérdida.
+
+- ows: Acciones de victoria ofensivas.
+
+- dws: Acciones de victorias defensivas.
+
+- ws: Un número estimado de victorias a las que un jugador ha contribuido.
+
+- ws_48: WS por 48 minutos.
+
+- obpm: Calcula el más/menos de un jugador respecto al rendimiento del equipo por cada 100 posesiones ofensivas.
+
+- dbpm: Calcula el más/menos de un jugador respecto al rendimiento del equipo por cada 100 posesiones defensivas.
+
+- bpm: Calcula el más/menos de un jugador respecto al rendimiento del equipo por cada 100 posesiones.
+
+- vorp: Valor sobre jugador de reemplazo.
+
+___
+
+## EDA
+
+### Correlaciones
+
+Haremos un pequeño análisis de las correlaciones para ver que variables están correlacionadas con el salario.
+
+```{r correlations}
+
+# Eliminamos las variables player, nba_country y tm
+
+corrplot(cor(data_nba %>% 
+                          select_at(vars(-(c(player, nba_country, tm)))), 
+              use = "complete.obs"), 
+         method = "circle", type = "upper")
+
+```
+
+Como podemos observar existe una cierta correlación positiva entre el salario, la edad, los partidos jugados, el  numero de miutos jugados, per, rebotes ofensivos y defensivos, las acciones ofensivas y defensivas, las victorias y el valor sobre el jugador de reemplazao.
+
+De esta manera ya tenemos una idea sobre las variables que pueden ser significativas en nuestro modelo.
+
+
+___
+
+## REGRESIÓN DEL MODELO 1
+
+Comenzamos realizando la regresión linear del modelo:
+
+```{r lm_1}
+regresion_lm1 <- lm(salary ~ . - (player + nba_country + tm), data = data_nba)
+summary(regresion_lm1)
+
+```
+
+Como podemos observar son significativos _age_, _nba_draft_number_, _g_ y _mp_. Como vemos el R2 ajustado es del 52.31%, es decir, el modelo solo explica el 52.31% de la variabilidad de los datos.
+
+
+___
+
+## EL MODELO:
+
+El modelo tiene que cumplir las siguientes características:
+
+  1. El modelo es correcto: a. Es lineal b. Estas las variables adecuadas. c. No falta ninguna ni sobra.
+
+  2. La variable X no es aleatoria
+
+  3. El error tiene esperanza cero
+  
+  4. Ausencia de Heteroscesdasticidad
+  
+  5. Ausencia de Autocorrelación (solamente Series Temporales)
+  
+  6. Normalidad de los errores
+  
+___
+
+## ANÁLISIS DE RESIDUOS
+
+### Validación global
+
+A continuación, realizaremos un gvlma, este test nos indica los p-valores de:
+
+  - Asimetía
+  - Curtosis
+  - Link function
+  - Heteroscedasticidad
+  - Test global
+
+```{r test gvlma reg1}
+gvmodel <- gvlma(regresion_lm1) 
+summary(gvmodel)
+
+```
+
+Como podemos observar este modelo cumple los las características definidas anteriormente, es por eso que transformaremos el modelo para ver si conseguimos mejorarlo de manera que cumpla los test.
+
+
+___
+
+## TRANSFORMACIÓN DEL MODELO
+
+### Box-Cox
+
+Mediante la función Box-Cox realizamos un contraste de hipótesis para ver si aplicamos la transformación logarítmica, si lamba (el parámetro de salida) es 0 o cercano a 0 podemos aplicar la transformación logarítmica, en caso de que sea distinto de 0 no se aplica.
+
+```{r BoxCox}
+BoxCox.lambda(data_nba$salary)
+
+```
+
+Como el resultado es cercano a 0 vamos a probar con la transformación logarítmica:
+
+```{r log_salary}
+data_log_nba <- data_nba %>% 
+                  mutate(salary = log(salary))
+
+# Comprobamos que ha cambiado
+data_log_nba
+
+```
+
+___
+
+## REGRESIÓN DEL MODELO 2
+
+Una vez tenemos modificado la base de datos, definiremos un nuevo modelo:
+
+```{r lm_2}
+regresion_lm2 <- lm(salary ~ . - (player + nba_country + tm), data = data_log_nba)
+summary(regresion_lm2)
+
+```
+Como podemos observar las variables significativas han variado, recordemos que esto se de debe al cambio que hemos realizado de pasar el salario a logaritmo, con el modelo 2 las variables significativas son: _nba_draftnumber_, _age_, _mp_, _per_, _ts_, _ast_, _tov_, _usg_ y _ws_48_.
+
+Además, hemos mejorado el R2 ajustado, en el modelo 1 era de 52.31% y en el modelo 2 es de 53.54%.
+
+
+### Selección de variables
+
+Podemos comparar modelos mediante el método de _Akaike’s Information Criterion(AIC)_ y seleccionaremos aquel modelo que tenga menosr AIC. En este caso, compararemos el modelo 1 y el 2.
+
+```{r AIC_1_2}
+
+AIC(regresion_lm1, regresion_lm2)
+
+```
+Como vemos el modelo 2 ( _regresion_lm2_ ) es mucho mejor que el primer modelo que hemos definido, ya que el AIC es menor.
+
+
+___
+
+## ANÁLISIS DE RESIDUOS
+
+### Normalidad
+
+#### QQPLOT
+
+```{r qqPlot}
+qqPlot(regresion_lm2, labels = row.names(data_nba), id.method = "identify", simulate = TRUE, main = "Q-Q Plot")
+
+```
+
+En este caso, al no seguir la recta azul contínua significa que no sigue una normalidad.
+
+
+### Histograma, densidad, normal + rug
+
+```{r distribution_of_errors}
+# Definimos una función que nos permita hacer un plot del histograma, la función de densidad, la normal y el rug
+
+residplot <- function(fit, nbreaks = 20) {
+  z <- rstudent(fit)
+  hist(z, breaks = nbreaks, freq = FALSE,
+       xlab = "Studentized Residual",
+       main = "Distribution of Errors")
+  rug(jitter(z), col = "forestgreen")
+  curve(dnorm(x, mean = mean(z), sd = sd(z)),
+        add = TRUE, col = "blue", lwd = 2)
+  lines(density(z)$x, density(z)$y,
+        col = "red", lwd = 2, lty = 2)
+  legend("topright",
+         legend = c( "Normal Curve", "Kernel Density Curve"),
+         lty = 1:2, col = c("blue", "red"), cex = 0.7)
+}
+
+residplot(regresion_lm2)
+
+```
+Como podemos observar nuestro modelo se llega acercar a una distribución normal pero no es una normal.
+
+
+### Jarque Bera
+
+El estadístico se distribuye como una chi-cuadrado de 2 grados de libertad, siendo la hipótesis nula que la distribución es normal (coeficiente de asimetría y curtosis es cero)
+
+```{r jarque_bera}
+vResid = resid(regresion_lm2)
+
+jbTest(vResid)
+
+```
+Como el p-valor es menor a 0.05 rechazamos la hipótesis nula, es decir, nuestro modelo no sigue una distribución normal.
+
+
+### Shapiro-Wilk
+
+El test de Shapiro-Wilk permite comprobar si una muestra ha sido generada por un distribución normal.
+
+```{r shapiro_wilk}
+shapiro.test(vResid)
+
+```
+
+Como el p-valor es menor a 0.05 rechazamos la hipótesis nula, es decir, nuestro modelo no sigue una distribución normal.
+
+
+### Linealidad
+
+Se grafican los valores ajustados con respecto a los predictores, si no hay problemas de linealidad se obtiene un recta sobre las que se representan los puntos.
+
+```{r crPlots}
+crPlots(regresion_lm2)
+
+```
+
+### Varianza constante. Homoscedasticidad
+
+La hipótesis nula es que la varianza es constante.
+
+```{r Breusch_Pagan_test}
+ncvTest(regresion_lm2)
+
+spreadLevelPlot(regresion_lm2)
+
+```
+
+
+### Validación global
+
+A continuación, realizaremos un gvlma, este test nos indica los p-valores de:
+
+
+```{r test gvlma}
+gvmodel <- gvlma(regresion_lm2) 
+summary(gvmodel)
+```
+
+Como podemos observar solo cumple la heteroscedastiicdad.
+
+
+### Multicolinealidad
+
+Para detectar la multicolinealidad se utiliza el Factor de inflación de varianza (VIF). Para cualquier regresor la raíz del VIF indica cuantas veces es la varianza del estimador es mayor que la que se obtendría si no hubiera correlación entre los regresores.
+
+```{r VIF}
+vif(regresion_lm2)
+
+sqrt(vif(regresion_lm2)) > 2
+
+```
+
+En este caso, algunas de nuestras variables presentan problemas de multicolinealidad. Tiene sentido porque bpm depende de obpm y dbpm.
+
+
+### Outliers
+
+Comenzamos con los __VALORES ATÍTPICOS__:
+
+```{r outlierTest}
+outlierTest(regresion_lm2)
+
+```
+
+Tenemos un outlier en 350.
+
+
+Ahora, comprobaremos si se tratan de __VALORES EXTREMOS__:
+
+```{r high_leverage_points}
+hat.plot <- function(fit) {
+  p <- length(coefficients(fit))
+  n <- length(fitted(fit))
+  plot(hatvalues(fit), main = "Index Plot of Hat Values")
+  abline(h = c(2,3) * p / n, col = "red", lty = 2)
+  identify(1:n, hatvalues(fit), names(hatvalues(fit)))
+}
+hat.plot(regresion_lm2)
+
+```
+
+Por último, analizaremos los __VALORES INFLUYENTES__:
+
+```{r cook_distance}
+cutoff <- 4 / (nrow(data_nba) - length(regresion_lm2$coefficients) - 2)
+plot(regresion_lm2, which = 4, cook.levels = cutoff)
+abline(h = cutoff, lty = 2, col = "red")
+
+```
+
+Vemos los valores influyentes: 141, 164, 271.
+
+### Influence plot
+
+```{r influence_plot}
+influencePlot(regresion_lm2, id.method = "identify", main = "Influence Plot",  
+              sub = "Circle size is proportial to Cook's Distance" )
+
+```
+
+
+___
+
+### CONCLUSIÓN:
+Hemos conseguido mejorar el modelo inicial, pero sigue presentando problemas, para ello generaremos un modelo con los métodos de selección estudiados: _best subset_, _forward stepwise_ y _backward stepwise_.
+
+
+___
+
+## MÉTODOS DE SELECCIÓN
+
+### Best subset
+
+Consiste en estimar todas las regresiones posibles con las combinaciones de los _p_ regresores.
+
+```{r best_subset}
+regfit.full = regsubsets(salary ~ . -(player + nba_country + tm) ,data = data_log_nba)
+
+reg.summary = summary(regfit.full)
+
+reg.summary
+
+```
+
+A continuación, veremos cuál es el mejor:
+
+```{r df_best_subset}
+df_bestsubset <- data.frame(Adj.R2 = (reg.summary$adjr2),
+                            CP = (reg.summary$cp),
+                            BIC = (reg.summary$bic)
+                           )
+df_bestsubset
+
+```
+
+Como vemos, el mejor es modelo que incluye las 8 variables.
+
+```{r lm_3}
+regresion_lm3 <- lm(salary ~ nba_draftnumber + age + mp + per + ts + drb + usg + bpm, data = data_log_nba)
+
+summary(regresion_lm3)
+
+```
+### Step AIC "both"
+
+Vamos a probar con otro método para ver si obtenemos un mayor R2:
+
+```{r stepAIC}
+stepAIC(regresion_lm2, direction = "both")
+
+```
+
+```{r lm_4}
+regresion_lm4 <- lm(salary ~ nba_draftnumber + age + mp + per + ts +  trb + ast + tov + usg + dws + ws_48 + obpm + bpm, 
+                    data = data_log_nba)
+
+summary(regresion_lm4)
+```
+
+Como vemos este modelo es mejor que el anterior ya que tiene mayor R2, aún así compararemos los AIC de los modelos 3 y 4:
+
+```{r AIC}
+AIC(regresion_lm3, regresion_lm4)
+
+```
+
+Como podemos ver el AIC del modelo 4 ( _regresion_lm4_ ) es menor que el 3, por lo tanto, seleccionamos el modelo 4.
+
+
+___
+
+## CROSS VALIDATION
+
+```{r shrinkage}
+
+# Definimos nuestras funciones
+shrinkage <- function(fit, k = 10){ 
+  require(bootstrap)
+  
+theta.fit <- function(x, y){lsfit(x,y)} 
+theta.predict <- function(fit, x){cbind(1, x) %*% fit$coef}
+
+x <- fit$model[,2:ncol(fit$model)] 
+y <- fit$model[,1]
+results <- crossval(x, y, theta.fit, theta.predict, ngroup=k) 
+r2 <- cor(y, fit$fitted.values)^2 
+r2cv <- cor(y, results$cv.fit)^2 
+cat("Original R-square =", r2, "\n")
+cat(k, "Fold Cross-Validated R-square =", r2cv, "\n") 
+cat("Change =", r2-r2cv, "\n")
+}
+
+# Aplicamos la funcion a nuestro modelo
+shrinkage(regresion_lm4)
+
+```
+
+Como podemos obsrervar la diferencia es del 4%
+
+
+___
+
+## IMPORTANCIA RELATIVA
+
+En este apartado calcularemos los _relative weights_:
+
+```{r relative_weights}
+
+# Definimos la funcion
+relweights <- function(fit,...){ 
+  R <- cor(fit$model) 
+  nvar <- ncol(R)
+  rxx <- R[2:nvar, 2:nvar] 
+  rxy <- R[2:nvar, 1] 
+  svd <- eigen(rxx) 
+  evec <- svd$vectors 
+  ev <- svd$values
+  delta <- diag(sqrt(ev))
+  lambda <- evec %*% delta %*% t(evec)
+  lambdasq <- lambda ^ 2 
+  beta <- solve(lambda) %*% rxy 
+  rsquare <- colSums(beta ^ 2) 
+  rawwgt <- lambdasq %*% beta ^ 2 
+  import <- (rawwgt / rsquare) * 100 
+  import <- as.data.frame(import)
+  row.names(import) <- names(fit$model[2:nvar])
+  names(import) <- "Weights"
+  import <- import[order(import),1, drop = FALSE]
+  dotchart(import$Weights, labels = row.names(import), xlab = "% of R-Square", pch = 19, 
+           main = "Relative Importance of Predictor ariables", 
+           sub = paste("Total R-Square=", round(rsquare, digits = 3)),
+           ...)
+return(import)
+}
+
+# Aplicamos la funcion
+relweights(regresion_lm4, col = "green")
+
+```
+
+Gracias a este gráfico somos capaces de observar el porcentaje de R2 que explica cada variable. De esta manera, las más importantes son nba_draftnumber y mp, seguidas de age y dws.
+
+___
+
+## PREDICCIÓN
+
+Para finalizar este ejercicio vamos a predecir el salario de uno de los jugadores, en concreto, el de Marc Gasol:
+
+```{r Marc_Gasol_salary_prediction}
+
+pred.ind <- data.frame(nba_draftnumber = 48, mp = 2374, age = 33, dws = 2.6, bpm = 1.5, trb = 14.2, ast = 21.5, ts = 0.531, 
+                       obpm = -0.2, usg = 25.7, per = 17.3, tov = 14.1, ws_48 = 0.080)
+pred.ind
+
+predict(regresion_lm4, newdata = pred.ind)
+
+```
+
+En el df su salario en logaritmo es 16.93533, por lo que si nuestro modelo es preciso, podemos concluir que este jugador está sobrevalorado, ya que el salario real es mayor que el estimado.
+
+```{r sample_for_seed(1234)}
+
+# Establecemos la semilla 1234 para obtener los mismos resultados 
+set.seed(1234)
+
+# Seleccionaremos 10 muestras para la prediccion
+n <- 10 
+
+# Creamos nuestra muestra sin datos repetidos
+
+ind <- sample(1:nrow(data_log_nba), n, replace = FALSE)
+muestra <- data_log_nba[ind,]
+muestra <- data.frame(muestra)
+muestra
+
+```
+
+
+Esa es la muestra de jugadores que hemos obtenido con sus salarios, a continuación, predeciremos lo salarios de esto jugadores.
+
+```{r sample_salary_prediction}
+
+# Predecimos el salario de los jugadores 
+predict(regresion_lm4, newdata = muestra)
+
+```
+Como podemos observar, existen diferencias entre nuestro modelo y la realidad, esto puede explicarse porque el modelo seleccionado no es del todo preciso y/o que ciertos jugadores están infravalorados y sobrevalorados.
+
+___
+___
