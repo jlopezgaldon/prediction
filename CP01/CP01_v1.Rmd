@@ -53,14 +53,14 @@ ___
 
 Comenzamos analizando los valores duplicados, para posteriormente eliminarlos.
 
-```{r duplicated_players}
+```{r duplicate_players}
 # Observamos que cuantos valores duplicados tenemos
 nrow(data_nba[duplicated(data_nba$Player), ])
 ```
 
 En este caso tenemos 2 jugadores repetidos.
 
-```{r delete_duplicated_data}
+```{r delete_duplicate_data}
 # Para eliminar los jugadores repetidos:
 data_nba <- data_nba[!duplicated(data_nba$Player), ]
 data_nba
