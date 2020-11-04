@@ -1,0 +1,239 @@
+---
+title: "CPO2"
+author: "Jose López Galdón"
+date: "`r Sys.Date()`"
+output:
+  prettydoc::html_pretty:
+    theme: cayman
+    highlight: github
+---
+
+
+```{r setup, include = FALSE, warning = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+[//]: Librerías
+
+```{r Libraries, include = FALSE}
+
+library(here) # Comentarios [//]:
+library(tidyverse)
+library(janitor) # Limpieza de nombres
+library(magrittr) # Pipe operators %<>%
+library(rsample)  # data splitting 
+library(glmnet)   # implementing regularized regression approaches
+
+```
+
+## CARGAMOS LOS DATOS
+
+```{r load data, include = FALSE}
+
+raw_data <- read_csv("../data/01_raw/nba.csv")
+
+```
+
+
+Visualizamos los datos.
+
+```{r view data}
+
+raw_data
+
+```
+
+***
+***
+
+## LIMPIEZA DEL DATASET
+
+### Renombrar columnas
+
+El problema que tenemos, es que los nombres de las columnas no tienen el formato adecuado, esto es porque presentan símbolos como %.
+
+```{r clean names}
+
+# Para ello usaremos la funcion clean_names() que nos cambiará aquellos valores que nos puedan ocasionar problemas a la hora de trabajar con las variables
+
+raw_data %<>% clean_names()   # %<>%: Evita poner "raw_data <- raw_data %>%"
+colnames(raw_data)
+
+```
+
+Una vez tenemos los nombres de las variables en el formato correcto, ya podemos comenzar con el tratamiento de *duplicados* y de *valores nulos*
+
+***
+
+### Data wrangling
+
+La manipulación de datos es el proceso de limpieza y unificación de conjuntos de datos complejos para el análisis, lo que a su vez aumenta la productividad dentro de una organización.
+
+```{r data wrangling}
+
+# Valores duplicados: los eliminamos
+
+raw_data %<>% distinct(player, .keep_all = T)
+
+# Valores nulos:
+
+summarise_all(raw_data, funs(sum(is.na(.))))
+  
+  # Como existen pocos valores nulos los eliminaremos
+
+raw_data %<>% drop_na()
+
+```
+
+Recordamos de la práctica CP01 que realizabamos la transformación logarítmica del salario:
+
+```{r log(salay)}
+
+log_data <- raw_data %>% mutate(salary = log(salary))
+
+```
+
+***
+***
+
+## MÉTODOS DE CONCETRACIÓN (SHRINKAGE METHODS)
+
+La reducción de las estimaciones de los coeficientes tiene el efecto de reducir significativamente su varianza. Las dos técnicas más conocidas para reducir las estimaciones de coeficientes hacia cero son la regresión de cresta (Ridge) y el lazo (Lasso).
+
+```{r seed & training set}
+
+# Generamos una semilla con la fecha en la que realizamos el modelo para pode reproducirlo en más ocasiones
+
+set.seed(29102020)
+
+# Vamos a utilizar una proporción 80% para el training y 20% para el test
+
+nba_split <- initial_split(log_data, prop = .8, strata = "salary")
+
+# Definimos nuestras bases de training y test
+
+nba_train <- training(nba_split)
+nba_test  <- testing(nba_split)
+
+```
+
+
+```{r discard intercept test & train}
+
+# A continuación, eliminaremos el intercepto
+
+nba_train_x <- model.matrix(salary ~ . -player -nba_country -tm, data = log_data)[, -1]
+nba_train_y <- log_data$salary
+
+nba_test_x <- model.matrix(salary ~ . -player -nba_country -tm, data = log_data)[, -1]
+nba_test_y <- log_data$salary
+
+# ¿Cuál es la dimensión de nuestro dataset? Esto lo utilizamos para comprobar que está ok
+dim(nba_train_x)
+
+```
+
+### Elastic Net
+
+La red elástica es un método de regresión regularizado que combina lienalmente las penalizaciones de los métodos de Lasso y Ridge.
+
+```{r elastic net regression, fig.height = 16, fig.width = 8, fig.align = "center"}
+
+# Definios nuestros 3 modelos, vamos a crear un elastic net con un alpha de 0.5
+
+lasso    <- glmnet(nba_train_x, nba_train_y, alpha = 1.0)
+
+elastic <- glmnet(nba_train_x, nba_train_y, alpha = 0.5)
+
+ridge    <- glmnet(nba_train_x, nba_train_y, alpha = 0.0)
+
+# Hacemos un plot para visualizarlos
+
+par(mfrow = c(3, 1), mar = c(6, 4, 6, 2) + 0.1)
+
+plot(lasso, xvar = "lambda", main = "Lasso (Alpha = 1)")
+plot(elastic, xvar = "lambda", main = "Elastic Net (Alpha = 0.5)")
+plot(ridge, xvar = "lambda", main = "Ridge (Alpha = 0)")
+```
+
+Una vez tenemos representados los 3 modelos, pasaremos a escoger el mejor de ellos, modificando los parámetros λ  y α.
+
+#### Ajuste de λ y α
+
+```{r tunning lambda and alpha (elastic net)}
+
+# Mantemeos los mismos folds
+
+fold_id <- sample(1:10, size = length(nba_train_y), replace = TRUE)
+
+# Vamos a crear una tibble que contenga los alphas desde 0 hasta 1, de 0.01 en 0.01, de manera que podemos escoger los dos mejores parámetros (aplha y lambda)
+
+tuning_grid <- tibble::tibble(
+  alpha      = seq(0, 1, by = .1),
+  mse_min    = NA,
+  mse_1se    = NA,
+  lambda_min = NA,
+  lambda_1se = NA
+)
+tuning_grid
+
+# Hacemos un loop que nos complete la tabla
+
+for(i in seq_along(tuning_grid$alpha)) {
+  
+  # Añademe el modelo de cross validation correspondiente para dicho alpha
+  
+  fit <- cv.glmnet(nba_train_x, nba_train_y, alpha = tuning_grid$alpha[i], foldid = fold_id)
+  
+  # Obtenemos los valores de alpha y lambda correspondientes
+  
+  tuning_grid$mse_min[i]    <- fit$cvm[fit$lambda == fit$lambda.min]
+  tuning_grid$mse_1se[i]    <- fit$cvm[fit$lambda == fit$lambda.1se]
+  tuning_grid$lambda_min[i] <- fit$lambda.min
+  tuning_grid$lambda_1se[i] <- fit$lambda.1se
+}
+
+# Volvemos a cargar el tibble con la información
+
+tuning_grid
+
+```
+
+A priori, podemos deducir que el modelo con alpha = 1.0, es decir, el modelo Lasso es el mejor, sin embargo vamos a dibujar un gráfico para comprobar si esto es cierto
+
+```{r graph MSE, fig.align = 'center'}
+
+# Dibujamos los modelos anteriores con la desviación estándar para ver si es cierto que el modelo Lasso es el mejor
+
+tuning_grid %>%
+  mutate(se = mse_1se - mse_min) %>%
+    ggplot(aes(alpha, mse_min)) +
+      geom_line(size = 2) +
+      geom_ribbon(aes(ymax = mse_min + se, ymin = mse_min - se), alpha = .25) +
+      ggtitle("MSE ± one standard error")
+
+```
+
+Como están todos dentreo de nuestro intervalo de confianza, todos son válidos. Por lo tanto, escogemos el más simple, en este caso el LASSO.
+
+***
+***
+
+## PREDICCIÓN
+
+Por último, realizaremos la predicción del modelo lasso.
+
+```{r prediction lasso}
+
+# Calculamos el mínimo MSE para Lasso
+
+cv_lasso   <- cv.glmnet(nba_train_x, nba_train_y, alpha = 1.0)
+min(cv_lasso$cvm)
+
+# Realizamos el cálculo con el dataset de training
+
+pred <- predict(cv_lasso, s = cv_lasso$lambda.min, nba_test_x)
+mean((nba_test_y - pred)^2)
+
+```
