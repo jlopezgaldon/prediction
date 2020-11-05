@@ -1,0 +1,267 @@
+---
+title: "CP03"
+author: "Jose López Galdón"
+date: "`r Sys.Date()`"
+output:
+  prettydoc::html_pretty:
+    theme: cayman
+    highlight: github
+---
+
+
+```{r setup, include = FALSE, warning = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+[//]: Librerías
+
+```{r Libraries, include = FALSE}
+
+library(here) # Comentarios [//]:
+library(tidyverse)
+library(janitor) # Limpieza de nombres
+library(skimr) # Summary pro
+library(magrittr) # Pipe operators %<>%
+library(corrplot) # Gráfico de correlaciones
+library(ggcorrplot)  # Correlaciones con ggplot
+library(PerformanceAnalytics) # Otra correlación
+#library(rsample)  # data splitting 
+#library(glmnet)   # implementing regularized regression approaches
+library(imputeTS) # na_mean() para sustituir NaN por la media
+library(broom) # Modelos en df
+library(flextable) # Tablas formateadas
+library(mgcv) # Estimaciones GAM
+library(reshape2) # Melt DF
+
+```
+
+## CARGAMOS LOS DATOS
+
+```{r load data, include = FALSE}
+
+raw_data <- read_csv("../data/01_raw/pisasci2006.csv")
+
+```
+
+Visualizamos los datos.
+
+```{r view data}
+
+raw_data
+
+```
+
+***
+***
+
+## LIMPIEZA DEL DATASET
+
+### Selección de variables
+
+Las variables clave son las siguientes:
+
+  - Overall Science Score (average score for 15 year olds)
+  - Interest in science
+  - Support for scientific inquiry
+  - Income Index
+  - Health Index
+  - Education Index
+  - Human Development Index (composed of the Income index, Health Index, and Education Index)
+  
+```{r select variables}
+
+raw_data %<>%
+  select(Country, Overall, Interest, Support, Income, Health, Edu, HDI)
+
+```
+
+
+### Renombrar columnas
+
+Comenzaremos cambiando los nombres de las columnas a minusculas para poder trabajar más cómodamente con las variables
+
+```{r clean names}
+
+# Para ello usaremos la funcion clean_names() que nos cambiará aquellos valores que nos puedan ocasionar problemas a la hora de trabajar con las variables
+
+raw_data %<>% clean_names()   # %<>%: Evita poner "raw_data <- raw_data %>%"
+colnames(raw_data)
+
+```
+
+Una vez tenemos los nombres de las variables en el formato correcto, ya podemos comenzar con el tratamiento de *duplicados* y de *valores nulos*
+
+***
+
+### Data wrangling
+
+La manipulación de datos es el proceso de limpieza y unificación de conjuntos de datos complejos para el análisis, lo que a su vez aumenta la productividad dentro de una organización.
+
+En esta ocasión tenemos un dataset reducido con bastantes NaN, por lo que si eliminamos estos valores con `drop_na()` perderemos mucha información, es por ello por lo que cambiaremos los nulos por la media.
+
+```{r data wrangling}
+
+# Valores duplicados: los eliminamos
+
+raw_data %<>% distinct(country, .keep_all = T)
+
+# Valores nulos:
+
+summarise_all(raw_data, funs(sum(is.na(.))))
+  
+  # Como existen muchos valores nulos los sustituimos por la media con la funcion na_mean() de la libreria imputeTS
+
+raw_data <- na_mean(raw_data)
+
+
+```
+
+Por lo tanto, ya tenemos nuestro DF limpio y listo para trabajar
+
+```{r rename raw_data}
+
+data <- raw_data
+
+View(data)
+
+attach(data)
+
+```
+
+***
+***
+
+## EDA
+
+A continuación, realizaremos un resumen estadístico de las variables y graficaremos histogramas con sus densidades, correlaciones y gráficos de dispersión.
+
+### Estadísticos relevantes 
+
+```{r skim}
+
+skim(data)
+
+```
+
+### Correlaciones
+
+
+```{r chart.correlation, fig.height = 12, fig.width = 12, fig.align = "center"}
+
+chart.Correlation(data %>% 
+               select_at(vars(-country)),
+               histogram = TRUE, pch = 19)
+
+```
+
+Vemos como existenciertas correlaciones, como la del hdi (Índice de Desarrollo Humano) con la educación, la salud o la renta.
+
+***
+***
+
+## SPLINES SUAVIZADO
+
+### Teoría 
+
+Son las splines de regresión, que se crean especificando un conjunto de nudos, produciendo una secuencia de funciones de base, y luego usando mínimos cuadrados para estimar los coeficientes de spline.
+
+Suavizar splines es un enfoque diferente para crear una spline. Hay que encontrar una función que haga que el RSS sea razonablemente pequeño, pero que también sea fluido.
+
+Una forma de hacerlo es utilizar un parámetro de ajuste lambda que penaliza la variabilidad en la función:
+
+  - Si lambda = 0, el término de penalización no tiene ningún efecto, y la función estará turbia e interpolará cada valor.
+
+  - Cuando lamba = infinito, la función será perfectamente suave, una línea recta (en realidad, una línea lineal de mínimos cuadrados).
+  
+### Práctica
+
+A continuación, calcularemos por cross_validation los grados de libertad óptimos de cada variable.
+
+```{r smooth spline with cv}
+
+# INTEREST
+
+fit_interest <- smooth.spline(x = interest, y = overall, cv = TRUE)
+fit_interest$df
+
+# SUPPORT
+
+fit_support <- smooth.spline(x = support, y = overall, cv = TRUE)
+fit_support$df
+
+# INCOME
+
+fit_income <- smooth.spline(x = income, y = overall, cv = TRUE)
+fit_income$df
+
+# HEALTH
+
+fit_health <- smooth.spline(x = health, y = overall, cv = TRUE)
+fit_health$df
+
+# EDU
+
+fit_edu <- smooth.spline(x = edu, y = overall, cv = TRUE)
+fit_edu$df
+
+# HDI
+
+fit_hdi <- smooth.spline(x = hdi, y = overall, cv = TRUE)
+fit_hdi$df
+
+```
+Una vez tenemos los resultados de los grados de libertad ideales para cada variable por CV:
+
+- `Interest: 4.750171`
+- `Support: 2.001243`
+- `Income: 4.244952`
+- `Health: 2.002844`
+- `Edu: 2.002385`
+- `HDI: 8.603228`
+
+Comprobaremos la diferencia de haber obtenido por CV los grados de libertado o introducirlos manualmente al azar:
+
+```{r example of using the correct df, fig.height = 7, fig.width = 10, fig.align = "center"}
+
+# Para nuestro ejemplo cogeremos la variable interest:
+
+  # Pirmero, generamos un smooth.spline con 10 grados de libertad (este número es al azar)
+
+fit_df10_income <- smooth.spline(x = income, y = overall, df = 10)
+
+  # Ploteamos ambos modelos para comparar
+plot(income, overall, col = 'gray')
+  lines(fit_df10_income, col = 'dodgerblue', lwd = 3)   # Plot del modelo con 10 grados de libertad
+  lines(fit_income, col = 'olivedrab3', lwd = 3)            # Plot del modelo con los grados de libertad por CV
+  legend('topleft', legend = c('10 DF', '4.24 DF'),   # Parámetros de la leyenda
+       col = c('dodgerblue', 'olivedrab3'), lty = 1, lwd = 3, cex = 1, bg = 'gray87')
+
+
+```
+
+Como podemos observar, al establecer los grados de libertad de manera manual corremos el riesgo de sufrir overfitting o underfitting, así en la línea azul bemos como hay unas ondulaciones excesivas que no generalizan de manera adecuada, esto es producto de tener un elevado número de grados de libertad, si por el contrario, reducimos los grados de libertad en exceso tenderemos a una línea recta, por lo que tendremos underfitting.
+
+***
+***
+
+## MODELOS ADITIVOS GENERALIZADOS (GAM)
+
+### Teoría 
+
+Los splines se explican desde la perspectiva de adaptar un modelo a la respuesta Y con un único predictor X.
+Exploramos el problema de la flexibilidad prediciendo Y sobre la base de varios predictores. Esta es nuevamente una extensión del modelo lineal simple.
+
+Los modelos GAM proporcionan un marco general para extender el modelo lineal al permitir funciones no lineales de cada variable, mientras se mantiene la capacidad de adición.
+
+### Práctica
+
+```{r first gam model, fig.height = 10, fig.width = 10, fig.align = "center"}
+
+modelo_gam_1 <- gam(overall ~ s(interest) + s(support) + s(income) + s(health) + s(edu) + s(hdi), data = data)
+
+par(mfrow = c(2, 3))
+plot(modelo_gam_1, se = TRUE, col = 'dodgerblue', lwd = 2)
+
+```
+

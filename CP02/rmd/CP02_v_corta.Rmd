@@ -90,7 +90,13 @@ Recordamos de la práctica CP01 que realizabamos la transformación logarítmica
 
 ```{r log(salay)}
 
+
 log_data <- raw_data %>% mutate(salary = log(salary))
+
+cat_vars <- c('player', 'nba_country', 'tm')
+
+log_data <- log_data %>% 
+  select_at(vars(-cat_vars))
 
 ```
 
@@ -105,11 +111,11 @@ La reducción de las estimaciones de los coeficientes tiene el efecto de reducir
 
 # Generamos una semilla con la fecha en la que realizamos el modelo para pode reproducirlo en más ocasiones
 
-set.seed(29102020)
+set.seed(05112020)
 
 # Vamos a utilizar una proporción 80% para el training y 20% para el test
 
-nba_split <- initial_split(log_data, prop = .8, strata = "salary")
+nba_split <- initial_split(log_data, prop = 0.7, strata = "salary")
 
 # Definimos nuestras bases de training y test
 
@@ -123,11 +129,11 @@ nba_test  <- testing(nba_split)
 
 # A continuación, eliminaremos el intercepto
 
-nba_train_x <- model.matrix(salary ~ . -player -nba_country -tm, data = log_data)[, -1]
-nba_train_y <- log_data$salary
+nba_train_x <- model.matrix(salary ~ ., data = nba_train)[, -1]
+nba_train_y <- nba_train$salary
 
-nba_test_x <- model.matrix(salary ~ . -player -nba_country -tm, data = log_data)[, -1]
-nba_test_y <- log_data$salary
+nba_test_x <- model.matrix(salary ~ ., data = nba_test)[, -1]
+nba_test_y <- nba_test$salary
 
 # ¿Cuál es la dimensión de nuestro dataset? Esto lo utilizamos para comprobar que está ok
 dim(nba_train_x)
