@@ -243,3 +243,5 @@ pred <- predict(cv_lasso, s = cv_lasso$lambda.min, nba_test_x)
 mean((nba_test_y - pred)^2)
 
 ```
+
+En nuestro caso el MSE es de 1.022857.

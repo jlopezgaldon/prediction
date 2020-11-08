@@ -1,0 +1,303 @@
+---
+title: "CPO2"
+author: "Jose López Galdón"
+date: "`r Sys.Date()`"
+output:
+  prettydoc::html_pretty:
+    theme: cayman
+    highlight: github
+---
+
+
+```{r setup, include = FALSE, warning = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+[//]: Librerías
+
+```{r Libraries, include = FALSE}
+
+library(here) # Comentarios [//]:
+library(tidyverse)
+library(janitor) # Limpieza de nombres
+library(skimr) # Summary pro
+library(magrittr) # Pipe operators %<>%
+library(corrplot) # Gráfico de correlaciones
+library(ggcorrplot)  # Correlaciones con ggplot
+library(PerformanceAnalytics) # Otra correlación
+library(rsample)  # data splitting 
+library(glmnet)   # implementing regularized regression approaches
+
+```
+
+## CARGAMOS LOS DATOS
+
+```{r load data, include = FALSE}
+
+raw_data <- read_csv("data/01_raw/nba.csv")
+
+```
+
+Visualizamos los datos.
+
+```{r view data}
+
+raw_data
+
+```
+
+***
+***
+
+## LIMPIEZA DEL DATASET
+
+### Renombrar columnas
+
+El problema que tenemos, es que los nombres de las columnas no tienen el formato adecuado, esto es porque presentan símbolos como %.
+
+```{r clean names}
+
+# Para ello usaremos la funcion clean_names() que nos cambiará aquellos valores que nos puedan ocasionar problemas a la hora de trabajar con las variables
+
+raw_data %<>% clean_names()   # %<>%: Evita poner "raw_data <- raw_data %>%"
+colnames(raw_data)
+
+```
+
+Una vez tenemos los nombres de las variables en el formato correcto, ya podemos comenzar con el tratamiento de *duplicados* y de *valores nulos*
+
+***
+
+### Data wrangling
+
+La manipulación de datos es el proceso de limpieza y unificación de conjuntos de datos complejos para el análisis, lo que a su vez aumenta la productividad dentro de una organización.
+
+```{r data wrangling}
+
+# Valores duplicados: los eliminamos
+
+raw_data %<>% distinct(player, .keep_all = T)
+
+# Valores nulos:
+
+summarise_all(raw_data, funs(sum(is.na(.))))
+  
+  # Como existen pocos valores nulos los eliminaremos
+
+raw_data %<>% drop_na()
+
+```
+
+***
+***
+
+## EDA
+
+A continuación, realizaremos un resumen estadístico de las variables, diagramas de dispersión así como un breve estudio de las correlaciones.
+
+### Estadísticos relevantes 
+
+```{r skim}
+
+# Con el comando skim() de la librería skimr podemos hacer un summary más completo
+
+skim(raw_data)
+
+```
+
+Como podemos observar más arriba, sería interesante estudiar aquellas variables cuya variabilidad (desviación respecto a la media) sea nula o cercana a cero, ya que esto nos indica que estas variables no son muy importantes ya que apenas varían.
+
+***
+
+### Diagramas de dispersión
+
+```{r scatterplots, fig.height = 20, fig.width = 8, fig.align = "center"}
+
+raw_data %>% 
+  select_at(vars(-c("player", "nba_country", "tm"))) %>%          # Seleccionamos todas las variables menos las categóricas
+    tidyr::gather("id", "value", 2:25) %>%
+      ggplot(., aes(y = salary, x = value)) +                     # Hacemos un ggplot con la variable salario en el eje y
+        geom_point() +
+        geom_smooth(method = "lm", se = FALSE, color = "forestgreen") +
+        facet_wrap( ~ id, ncol = 4, scales = "free_x")            # Utilizamos facet_wrap para ver todas los gráficos
+
+```
+
+Como podemos observar, parece que presentamos problemas con la variable _salary_, para ello aplicaremos el logaritmo a la variable para ver si mejora.
+
+```{r log(salary) scatterplots, fig.height = 20, fig.width = 8, fig.align = "center"}
+
+# Aplicamos el mismo código que antes, pero con el log(salary)
+
+raw_data %>% 
+  select_at(vars(-c("player", "nba_country", "tm"))) %>%            
+    tidyr::gather("id", "value", 2:25) %>%
+      ggplot(., aes(y = log(salary), x = value)) +                    
+        geom_point() +
+        geom_smooth(method = "lm", se = FALSE, color = "forestgreen") +
+        facet_wrap( ~ id, ncol = 4, scales = "free_x")            
+
+```
+
+Como podemos observar ha mejorado un poco, por lo que mantendremos el cambio a `log(salary)`.
+
+```{r log(salay)}
+
+log_data <- raw_data %>% mutate(salary = log(salary))
+
+```
+
+
+### Correlaciones
+
+#### Gráfico de correlaciones estándar
+
+```{r correlations, fig.height = 8, fig.width = 8, fig.align = "center", warning = FALSE}
+
+# Generamos un vector con la informacion de aquellas variables que no analizamos
+
+cat_vars <- c("player", "nba_country", "tm")
+
+# Gráfico de correlaciones
+
+corrplot(cor(log_data %>% 
+               select_at(vars(-cat_vars)), 
+             use = "complete.obs"), 
+         method = "circle", type = "upper")
+
+```
+
+Como podemos observar, las variables _g_ (partidos jugados), _mp_ (minutos jugados), _ows_, _dws_ y _ws_ están ciertamente correlaciandas con el salario, sin embargo, tenemos correlaciones entre estas propias variables, en concreto, _g_ y _mp_ están correlacionadas, esto nos dará problemas posteriormente.
+
+***
+
+#### Heatmap
+
+```{r heatmap, fig.height = 8, fig.width = 10, fig.align = "center"}
+
+# Recordemos que eliminamos las variables que no queremos (cat_vars)
+
+ggcorrplot(cor(log_data %>% 
+               select_at(vars(-cat_vars)), 
+            use = "complete.obs"),
+            hc.order = TRUE,
+            type = "lower",  lab = TRUE, digits = 1, colors = c("red", "white", "steelblue"))
+
+```
+
+En este gráfico tenemos un _heatmap_ o mapa de calor con las correlaciones entre las variables. De esta manera, podemos observar como los tiros triples apenas influyen en el salario.
+
+***
+
+#### Chart correlation
+
+```{r chart.correlation, fig.height = 20, fig.width = 20, fig.align = "center"}
+
+chart.Correlation(log_data %>% 
+               select_at(vars(-cat_vars)),
+               histogram = TRUE, pch = 19)
+
+```
+
+El gráfico superior es muy interesante porque nos muestra los histogramas con las densidades en la diagonal, los gráficos de dispersión a la izquierda y las correlaciones a la derecha.
+
+***
+***
+
+## Model Selection
+
+```{r Regsubsets, fig.height = 10, fig.width =10, fig.align = "center"}
+
+# Genera la vase de datos quitando las variables: player, country y tm
+nba <- log_data %>% select_at(vars(-vars))
+
+# Generamos la muestra aleatoria 
+set.seed(4000)
+num_data <- nrow(nba)
+num_data_test <- 10
+train=sample(num_data ,num_data-num_data_test)
+
+# Separas la parte que estimas de la que predices
+data_train <- nba[train,]
+data_test  <-  nba[-train,]
+
+# Coge el metodo subset 
+model_select <- regsubsets(salary~. , data =data_train, method = "seqrep",nvmax=24)
+
+# Summary para ver el modelo
+model_select_summary <- summary(model_select)
+
+# DF para ver el r2, cp y bic
+data.frame(
+  Adj.R2 = (model_select_summary$adjr2),
+  CP = (model_select_summary$cp),
+  BIC = (model_select_summary$bic)
+)
+
+model_select_summary$outmat
+
+plot(model_select, scale = "bic", main = "BIC")
+
+data.frame(
+  Adj.R2 = which.max(model_select_summary$adjr2),
+  CP = which.min(model_select_summary$cp),
+  BIC = which.min(model_select_summary$bic)
+)
+coef(model_select,which.max(model_select_summary$adjr2))
+coef(model_select,which.min(model_select_summary$cp))
+coef(model_select,which.min(model_select_summary$bic))
+```
+El BIC plot nos indica cuanto mas oscuro mejor (es como las estrellas pero por colores)
+
+**“All models are wrong, some models are useful”, Box, G.E.P**
+
+
+```{r}
+
+# adjR2 model
+
+nba_r2 <- lm(salary~ mp , data =data_train)
+summary(nba_r2)
+# CP model
+
+nba_cp <- lm(salary~ nba_draft_number+age+mp+per+ts+f_tr+trb+ast+tov+usg+dws+ws_48+dbpm, data =data_train)
+summary(nba_cp)
+
+# BIC model
+
+nba_bic <- lm(salary~ nba_draft_number+age+mp+drb, data =data_train)
+summary(nba_bic)
+
+```
+
+
+```{r}
+
+# Prediction: para ver cuál de los 3 modelos es mejor
+
+# adjR2
+predict_r2 <- predict(nba_r2,newdata = data_test)
+cbind(predict_r2,data_test$salary)
+exp(cbind(predict_r2,data_test$salary)) # Para ver los salarios en $
+mean((data_test$salary-predict_r2)^2)
+sqrt(mean((data_test$salary-predict_r2)^2))
+
+# CP
+predict_cp <- predict(nba_cp,newdata = data_test)
+cbind(predict_cp,data_test$salary)
+exp(cbind(predict_cp,data_test$salary))
+mean((data_test$salary-predict_cp)^2)
+sqrt(mean((data_test$salary-predict_cp)^2))
+
+# BIC
+predict_bic <- predict(nba_bic,newdata = data_test)
+cbind(predict_bic,data_test$salary)
+exp(cbind(predict_bic,data_test$salary))
+mean((data_test$salary-predict_bic)^2)
+sqrt(mean((data_test$salary-predict_bic)^2))
+
+
+```
+
+Nos quedaríamos el que mejor se ha comportado desde el punto de vista predictivo, nos quedamos con el que menor error tenga

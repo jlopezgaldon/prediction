@@ -26,13 +26,11 @@ library(magrittr) # Pipe operators %<>%
 library(corrplot) # Gráfico de correlaciones
 library(ggcorrplot)  # Correlaciones con ggplot
 library(PerformanceAnalytics) # Otra correlación
-#library(rsample)  # data splitting 
-#library(glmnet)   # implementing regularized regression approaches
 library(imputeTS) # na_mean() para sustituir NaN por la media
 library(broom) # Modelos en df
 library(flextable) # Tablas formateadas
-library(mgcv) # Estimaciones GAM
 library(reshape2) # Melt DF
+library(gam) # Estimaciones GAM con splines
 
 ```
 
@@ -240,7 +238,7 @@ plot(income, overall, col = 'gray')
 
 ```
 
-Como podemos observar, al establecer los grados de libertad de manera manual corremos el riesgo de sufrir overfitting o underfitting, así en la línea azul bemos como hay unas ondulaciones excesivas que no generalizan de manera adecuada, esto es producto de tener un elevado número de grados de libertad, si por el contrario, reducimos los grados de libertad en exceso tenderemos a una línea recta, por lo que tendremos underfitting.
+Como podemos observar, al establecer los grados de libertad de manera manual corremos el riesgo de sufrir overfitting o underfitting, así en la línea azul vemos como hay unas ondulaciones excesivas que no generalizan de manera adecuada, esto es producto de tener un elevado número de grados de libertad, si por el contrario, reducimos los grados de libertad en exceso tenderemos a una línea recta, por lo que tendremos underfitting.
 
 ***
 ***
@@ -258,10 +256,81 @@ Los modelos GAM proporcionan un marco general para extender el modelo lineal al 
 
 ```{r first gam model, fig.height = 10, fig.width = 10, fig.align = "center"}
 
+  # Generamos un primer modelo gam con todas las variables con splines
 modelo_gam_1 <- gam(overall ~ s(interest) + s(support) + s(income) + s(health) + s(edu) + s(hdi), data = data)
 
+  # Realizamos los gráficos de cada variable para ver qué ocurre
 par(mfrow = c(2, 3))
 plot(modelo_gam_1, se = TRUE, col = 'dodgerblue', lwd = 2)
 
 ```
 
+Podemos generar un segundo modelo con los grados de libertad calculados con los splines:
+
+```{r second gam model, fig.height = 10, fig.width = 10, fig.align = "center"}
+
+  # Generamos nuestro segundo modelo
+modelo_gam_2 <- gam(overall ~ s(interest, 4.750171) + s(support, 2.001243) + s(income, 4.244952) + 
+                      s(health, 2.002844) + s(edu, 2.002385) + s(hdi, 8.603228), data = data)
+
+par(mfrow = c(2, 3))
+plot(modelo_gam_2, se = TRUE, col = 'steelblue4', lwd = 2)
+
+```
+
+
+Ahora podemos observa *health* y *edu* podrían ser lineales, sin embargo, hemos empeorado *hdi* ya que con este modelo no generaliza mucho.
+
+```{r third gam model, fig.height = 10, fig.width = 10, fig.align = "center"}
+
+  # Generamos nuestro segundo modelo
+modelo_gam_3 <- gam(overall ~ s(interest, 4.750171) + s(support, 2.001243) + s(income, 4.244952) + 
+                      health + edu + s(hdi), data = data)
+
+par(mfrow = c(2, 3))
+plot(modelo_gam_3, se = TRUE, col = 'springgreen3', lwd = 2)
+
+```
+
+
+Ahora vamos a comprobar cual es el mejor modelo mediante un ANOVA:
+
+```{r AIC & BIC}
+
+  # AIC 
+AIC(modelo_gam_1, modelo_gam_2, modelo_gam_3)
+  
+  # BIC
+BIC(modelo_gam_1, modelo_gam_2, modelo_gam_3)
+
+```
+
+Tras realizar el AIC y el BIC deducimos que el mejor modelo es el 3, recordemos que es aquel que incluye dos variables lineales.
+
+```{r summary model}
+
+summary(modelo_gam_3)
+
+```
+
+Como podemos comprobar en el `sumary(modelo_gam_3)` no son significativas las variables *edu* y *health* por lo que generaremos un modelo sin estas variables y lo compararemos:
+
+```{r forth gam model}
+
+  # Generamos nuestro segundo modelo
+modelo_gam_4 <- gam(overall ~ s(interest, 4.750171) + s(support, 2.001243) + s(income, 4.244952) + 
+                      + s(hdi), data = data)
+
+  # Lo comparamos con el anterior mediante un ANOVA
+anova(modelo_gam_3, modelo_gam_4)
+
+```
+Es ligeramente más significativo este modelo, por lo que lo seleccionaríamos.
+
+```{r summay 4th model}
+
+  # Realizamos el summary del modelo para ver cuál tiene menor MSE
+summary(modelo_gam_4)
+
+```
+En este caso tenemos un MSE de 643, mientras que en el tercer modelo era de 589, por lo tanto, **seleccionamos el `modelo_gam_3`**
