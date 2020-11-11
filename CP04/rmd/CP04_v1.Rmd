@@ -1,0 +1,225 @@
+---
+title: "CP04"
+author: "Jose López Galdón"
+date: "`r Sys.Date()`"
+output:
+  prettydoc::html_pretty:
+    theme: cayman
+    highlight: github
+---
+
+
+
+```{r setup, include = FALSE, warning = FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.width = 7, fig.height = 5, fig.align = "center", dpi = 500)
+```
+
+
+[//]: Librerías
+
+```{r Libraries, include = FALSE}
+
+library(here) # Comentarios [//]:
+library(dplyr)
+library(magrittr) # Pipe operators %<>%
+library(forecast) # Modelos
+library(xts) # Datos de series temporales (tiempo contínuo)
+library(ggplot2)
+
+```
+
+## CARGAMOS LOS DATOS
+
+```{r load data, include = FALSE}
+
+raw_data <- read.csv("../data/01_raw/IngresosApple.csv", sep = ";")
+
+```
+
+Visualizamos los datos.
+
+```{r view data}
+
+raw_data
+
+```
+
+***
+***
+
+## LIMPIEZA DEL DATASET
+
+### Fechas
+
+Como podemos observar la columna trismetes incluye también el año con el siguiente formato: `Qn yyyy` siendo *n* el número del trismetre y siendo *yyyy* el año. Para solucionar este problema transformaremos esta columna a formato fecha:
+
+```{r clean dates}
+
+  # Comenzamos pasando a fechas nuestra columna "Trimestre"
+fechas <- seq(as.Date("2008-04-01"), as.Date("2017-09-30"), by = "quarter")
+fechas
+
+  # Podemos comprobar que está bien haciendo la diferencia entre los elementos de "fechas" y el número de observaciones del df original
+
+length(fechas) - nrow(raw_data)
+
+```
+
+Une vez tenemos las 38 nuevas fechas, pasamos a tiempo contínuo lo base de datos:
+
+```{r xts_data}
+
+  # Primero eliminamos la columna trimestre, para cambiar a formato trimestra con nuestro vector "fechas"
+raw_data %<>% select(-Trimestre)
+
+  # Aplicamos la función xts() con el objtivo de pasarlo a tiempo contínuo
+data <- xts(raw_data, order.by = fechas)
+
+  # Transformamos las fechas a formarto trimestre
+x_data <- to.quarterly(data)
+
+  # Visualizamos el resultado
+x_data
+
+```
+```{r zoo data}
+
+  # Como en ciertos paquetes no funciona xts, lo pasaremos a formato zoo con la librería forecast para no tener problemas y cogemos el precio de cierre
+
+z_data = as.zoo(x_data$data.Close)
+
+  # Cambiamos el nombre de la columna
+names(z_data) <- "Ingresos"
+
+  # Visualizamos el resultado
+z_data
+
+```
+
+Una vez tenemos la base de datos, ya estamos listos para trabajar!
+
+***
+***
+
+## Sub-muestra
+
+Primero divideremos la muestra, dejando fuera los datos del 2017...
+
+```{r sub sample}
+
+  # Quitamos los 3 últimos datos, que son los del 2017
+c_omit = 3
+
+  # Tamaño del dataset
+n = length(z_data)
+
+  # Creamos la sub muestra sin los 3 últimos cuatrimestres
+o_ingresos <- window(x = z_data, start = index(z_data[1]),
+                     end = index(z_data[n - c_omit])
+                     )
+  # Viusalizamos el resultado
+o_ingresos
+
+```
+
+Como podemos observar, `o_ingresos` solo tiene los datos hasta 2016.
+
+***
+***
+
+## Selección automática del modelo ETS
+
+```{r automatic ETS}
+
+  # Mediante el comando ets() de la librería forecast podemos calcular automáticamente el mejor modelo ETS
+ets <- ets(o_ingresos)
+
+  # Observamos el modelo
+summary(ets)
+
+```
+
+Con la selección automática de ETS tenemos un modelo con un MAPE (*Mean Absolute Percentage Error*) de 8.677434 y un RMSE (*Root Mean Squared Error*) de 4120.155.
+
+***
+***
+
+## Selección automática del modelo ARIMA
+
+```{r automatic ARIMA}
+
+  # Mediante el comando auto.arima() de la librería forecast podemos calcular automáticamente el mejor modelo ARIMA
+arima = auto.arima(o_ingresos)
+
+summary(arima)
+
+```
+
+Con la selección automática de ETS tenemos un modelo con un MAPE (*Mean Absolute Percentage Error*) de 8.038297 y un RMSE (*Root Mean Squared Error*) de 4189.225.
+
+En nuestro caso vamos a seleccionar el modelo por el MAPE: es una medida de la precisión de la predicción de un método de predicción en estadísticas, por ejemplo en la estimación de tendencias, que también se utiliza como función de pérdida para problemas de regresión en el aprendizaje automático.
+
+Es por ello que seleccionamos el modelo ARIMA:
+
+***
+***
+
+## Predicción con el modelo ARIMA
+
+A continuación tenemos la representación de los ingresos de APPLE y nuestra predicción sombreada en naranja.
+
+```{r prediction}
+
+  # Realizamos la predicción del modelo ARIMA
+prediccion_ingresos = forecast(arima)
+
+  # Nos definimos un dataframe para el plot
+plot_data <- data.frame(value = as.vector(z_data), 
+                        time = time(z_data))
+  
+  # Realizamos la representación gráfica
+ggplot(plot_data) +                                          # ploteamos con nuestra base de datos nueva (plot_data)
+  geom_point(aes(x = time, y = value)) +                     # capa con los puntos 
+  geom_line(aes(x = time, y = value)) +                      # nueva capa con las líneas que unen los puntos 
+    autolayer(prediccion_ingresos, alpha = 0.5 ,             # con la función autolayer() dibujamos la predicción, aplha para la transparencia
+              col = "forestgreen") +                         # col = cambiamos el color de la pred
+      labs(title = "ARIMA", subtitle = "Predicción APPLE",   # Estblecemos los títulos
+           x = "Fechas por trimestre", y = "Ingresos")
+
+```
+
+Como podemos observar nuestra predicción se ha acercado a lo que ocurrió en la realidad pero desde una perspectiva más pesimista, ya que la caída de los ingresos predicha es mayor que lo ocurrido durante los tres tirmestres del 2017.
+
+Por último, incluiremos una tabla con los datos de las predicciones obtenidas:
+
+```{r predictions vs reality}
+
+  # Creamos un DF con los últimos valores tres valores reales y nuestra predicción
+
+prediccion_ingresos
+
+```
+
+***
+***
+
+## CONCLUSIONES
+
+Podemos observar como la tendencia de los ingresos de APPLE es amortiguada, es decir, observamos un rápido crecimiento durante las primeras etapas (2008 - 2012) y después un estancamiento de estos ingresos... ¿Por qué ocurre esto? 
+
+En el año 2016 la empresa anunció su primer caída de los ingresos desde el 2001, el motivo de esta caída es el descenso de ventas en el iPhone, el iPad y los Mac que como podemos observar en el grádico situado más abajo eran las principales fuentes de ingresos de la compañía, uno de los posibles motivos fue la falta de innovación en sus productos, esto sumado a un descenso del 30% de las ventas en China explican la caída del gigante estadounidense.
+
+![](https://cdn.statcdn.com/Infographic/images/normal/23450.jpeg)
+
+***
+***
+
+## Referencias
+
+Jiménez, M. (2016, 26 octubre). Apple, ¿a la espera de la remontada en 2017? Cinco Días. Recuperado de https://cincodias.elpais.comRoa
+
+M. M. (2020, 10 noviembre). ¿Cuánto ha crecido Apple en el siglo XXI? Recuperado de https://es.statista.com/grafico/23450/ingresos-de-apple-por-segmentos/
+
+
+
+
