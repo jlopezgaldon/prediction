@@ -1,0 +1,249 @@
+---
+title: "CP03_v02_PISA"
+output:
+  html_notebook:
+    toc: yes
+    toc_depth: 2
+    code_folding: none
+    highlight: pygments
+    theme: sandstone
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+<!--AQUI EL ESTILO CSS-->
+
+```{css, echo = FALSE}
+```
+
+<!--FIN DEL ESTILO CSS-->
+
+
+[//]: Comentario
+
+
+# Libraries and functions
+
+
+
+```{r Libraries and functions, message=FALSE, warning=FALSE}
+library(here) # Comentar
+library(tidyverse)
+library(janitor) # Clean names
+library(magrittr) # Pipe operators
+library(skimr)
+library(modelr)
+library(mgcv)
+```
+
+
+## My functions
+
+Te haces un script con todas tus funciones guardadas, y lo cargas `source('myfunctions.R')`
+
+```{r misc_functions}
+source('myfunctions.R')
+```
+
+
+## Data
+
+
+```{r initial_inspection_of_pisa, echo=1}
+pisa = read.csv('pisasci2006.csv')
+
+head(pisa)
+
+skim(pisa)
+
+```
+
+
+
+```{r bivariate_relationships, warning=FALSE, message=FALSE}
+# Es un dataframe melt con gather y las variables que quieres
+dmelt = pisa %>% 
+  select(-Evidence, -Explain, -Issues, -Interest, -Support) %>% 
+  gather(key=Variable, 
+         value=Value, 
+         -Overall, -Country)
+
+# Hacemos un plot de Overall con cada variable
+ggplot(aes(x=Value,y=Overall), data=dmelt) +
+  geom_point(color='#ff5500',alpha=.75) +
+  geom_smooth(se=F, lwd=.5, color='#00aaff') +
+  geom_text(aes(label=Country), alpha=0, size=1,angle=30, hjust=-.2,vjust=-.2) +
+  facet_wrap(~Variable, scales='free_x') +
+  labs(x='') +
+  theme_trueMinimal()
+```
+Parece que HDI y salud son lineales, para ello hago un modelo lineal con una de las variables:
+
+## Single Predictor
+
+### Linear Fit
+
+
+```{r mod_lm, echo=-4}
+library(mgcv)
+mod_lm <- gam(Overall ~ Income, data=pisa)
+summary(mod_lm)
+```
+
+### GAM
+
+### Fitting the model
+
+Este gam (mgcv) por defecto hace cv
+
+-  `bs = cr`, denoting cubic regression splines.
+
+```{r mod_gam1}
+mod_gam1 <- gam(Overall ~ s(Income, bs="cr"), data=pisa)
+summary(mod_gam1)
+```
+
+Si `edf` es cercano a 1, significa que el modelo es lineal, si son muy altos los df puedo sufrir de sobreajuste
+Estamos explicando 73.9% de la desviación
+
+### Graphical Display
+
+
+
+```{r mgcv_plot}
+plot(mod_gam1)
+```
+
+Podemos ver que quizas sufra sobreajuste, vemos que da valores negativos, si vamos al 0, vemos como corta en el 0.7, por lo que a más income mejores notas, pero hay un punto que esto no tiene efecto (de ahí ese descenso)
+
+```{r visualize_income_marginal_effect}
+library(ggeffects)
+
+plot_dat <- ggpredict(mod_gam1, terms = "Income")
+
+ggplot(plot_dat, aes(x = x, y = predicted)) + 
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = .25) +
+  geom_line(color = 'dodgerblue') + 
+  labs(x = 'Income')
+```
+
+Vemos que 400 está dentro de los grados de confianza.
+
+### Model Comparison
+
+
+```{r model_comparison}
+AIC(mod_lm, mod_gam1)
+```
+
+Es mejor el modelo no lineal
+
+Likelihood ratio test (approximate).
+
+```{r anova_gam}
+anova(mod_lm, mod_gam1, test="Chisq")
+```
+
+Es más significativo el modelo gam
+
+## Multiple Predictors
+
+
+### Linear Fit
+
+
+```{r mod_lm2}
+mod_lm2 <- gam(Overall ~ Income + Edu + Health+HDI, data=pisa)
+summary(mod_lm2)
+```
+
+### GAM
+
+
+```{r mod_gam2}
+mod_gam2 <- gam(Overall ~ s(Income) + s(Edu) + s(Health)+ s(HDI), data=pisa)
+summary(mod_gam2)
+```
+Vemos como health es prácticamente 1, por lo que será lineal
+
+```{r mod_gam2_b}
+mod_gam2b <- gam(Overall ~ s(Income) + s(Edu) + s(Health), data=pisa)
+summary(mod_gam2b)
+```
+
+```{r mod_gam2_plot}
+plot(mod_gam2)  # base mgcv plot
+
+library(patchwork) 
+
+g1 = 
+  ggpredict(mod_gam2, terms = "Income") %>% 
+  ggplot(aes(x = x, y = predicted)) + 
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = .25) +
+  geom_line(color = 'dodgerblue') + 
+  labs(x = 'Income')
+g2 = 
+  ggpredict(mod_gam2, terms = "Edu") %>% 
+  ggplot(aes(x = x, y = predicted)) + 
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = .25) +
+  geom_line(color = 'dodgerblue') + 
+  labs(x = 'Edu')
+g3 = 
+  ggpredict(mod_gam2, terms = "Health") %>% 
+  ggplot(aes(x = x, y = predicted)) + 
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = .25) +
+  geom_line(color = 'dodgerblue') + 
+  labs(x = 'Health')
+
+(g2 + g3 + g1 + plot_layout(nrow = 2)) * theme_trueMinimal()
+```
+```{r mod_gam2_c}
+mod_gam2c <- gam(Overall ~ s(Income) + s(Edu) + Health, data=pisa)
+summary(mod_gam2c)
+```
+
+Cuando ponemos Health como linal nos sale como no significativo y somos capaces de explicar el 90% de la desviación ¡Es un muy buen modelo!
+
+### 2D Smooths
+
+`te()` <- efectos cruzados entre Income y Edu, porque están correlacionados, por lo que estimamos el modelo con interacción.
+
+```{r mod_gam3}
+mod_gam3 <- gam(Overall ~ Health + te(Income, Edu), data=pisa)
+summary(mod_gam3)
+```
+
+
+
+```{r mod_gam3_plot, warning=FALSE}
+# use vis.gam from mgcv
+vis.gam(mod_gam3, view = c('Income', 'Edu'), theta = 90, phi = 10)
+vis.gam(mod_gam3, view = c('Income', 'Edu'), plot.type = 'contour')
+
+```
+
+Me explica como interactúan las dos para explicarme el overall, si las línas fueran rectas es que no hay interacción, pero como vemos las curvas de nivel si hay interacción entre *Income* y *Edu*
+
+### Model Comparison
+
+
+```{r model_comparison_redux}
+AIC(mod_lm2, mod_gam2, mod_gam3)
+```
+
+El modelo 2 se comporta mejor que los otros modelos
+
+### method="REML"
+
+Los métodos anteriores son por cv, no es un buen método cuando tenemos pocos datos, con REML los estima por máxima verosimulitud, el problema del REML es que puede generar sobreajuste en grandes modelos
+
+```{r}
+mod_gam4 <- gam(Overall ~ s(Income) + s(Edu) + s(Health)+ s(HDI),method="REML", data=pisa)
+summary(mod_gam4)
+```
+
+Como tienen 1 los `edf` son lineales, y vemos que la única significativa es el Income.
+
+Debemos estimar el REML y compararlo con el otro, los splines los utilizamos como EDA, con el gráfico de ggsmoth(). Se puede meter los splines dentro del elastic net

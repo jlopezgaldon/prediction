@@ -172,6 +172,7 @@ A continuación tenemos la representación de los ingresos de APPLE y nuestra pr
 
   # Realizamos la predicción del modelo ARIMA
 prediccion_ingresos = forecast(arima)
+prediccion_ingresos
 
   # Nos definimos un dataframe para el plot
 plot_data <- data.frame(value = as.vector(z_data), 

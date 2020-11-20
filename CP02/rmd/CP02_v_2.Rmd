@@ -1,0 +1,238 @@
+---
+title: "CPO2"
+author: "Jose López Galdón"
+date: "`r Sys.Date()`"
+output:
+  prettydoc::html_pretty:
+    theme: cayman
+    highlight: github
+---
+
+
+```{r setup, include = FALSE, warning = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+[//]: Librerías
+
+```{r Libraries, include = FALSE}
+
+library(here) # Comentarios [//]:
+library(tidyverse)
+library(janitor) # Limpieza de nombres
+library(magrittr) # Pipe operators %<>%
+library(rsample)  # data splitting 
+library(caret)
+library(glmnet)   # implementing regularized regression approaches
+
+```
+
+## CARGAMOS LOS DATOS
+
+```{r load data, include = FALSE}
+
+raw_data <- read_csv("../data/01_raw/nba.csv")
+
+```
+
+
+Visualizamos los datos.
+
+```{r view data}
+
+raw_data
+
+```
+
+***
+***
+
+## LIMPIEZA DEL DATASET
+
+### Renombrar columnas
+
+El problema que tenemos, es que los nombres de las columnas no tienen el formato adecuado, esto es porque presentan símbolos como %.
+
+```{r clean names}
+
+# Para ello usaremos la funcion clean_names() que nos cambiará aquellos valores que nos puedan ocasionar problemas a la hora de trabajar con las variables
+
+raw_data %<>% clean_names()   # %<>%: Evita poner "raw_data <- raw_data %>%"
+colnames(raw_data)
+
+```
+
+Una vez tenemos los nombres de las variables en el formato correcto, ya podemos comenzar con el tratamiento de *duplicados* y de *valores nulos*
+
+***
+
+### Data wrangling
+
+La manipulación de datos es el proceso de limpieza y unificación de conjuntos de datos complejos para el análisis, lo que a su vez aumenta la productividad dentro de una organización.
+
+```{r data wrangling}
+
+# Valores duplicados: los eliminamos
+
+raw_data %<>% distinct(player, .keep_all = T)
+
+# Valores nulos:
+
+summarise_all(raw_data, funs(sum(is.na(.))))
+  
+  # Como existen pocos valores nulos los eliminaremos
+
+raw_data %<>% drop_na()
+
+```
+
+Recordamos de la práctica CP01 que realizabamos la transformación logarítmica del salario:
+
+```{r log(salay)}
+
+
+log_data <- raw_data %>% mutate(salary = log(salary))
+
+cat_vars <- c('player', 'nba_country', 'tm')
+
+nba <- log_data %>% 
+  select_at(vars(-cat_vars))
+
+```
+
+***
+***
+
+## REGULARIZACIÓN
+
+### Elastic net
+
+La regresión de red elástica se puede calcular fácilmente mediante el flujo de trabajo de caret, que invoca el paquete `glmnet`.
+
+Usamos `caret` para seleccionar automáticamente los mejores parámetros de ajuste *alpha* y *lambda*. Los paquetes de intercalación prueban un rango de posibles valores *alpha* y *lambda*, luego seleccionan los mejores valores para *alpha* y *lambda*, lo que da como resultado un modelo final que es un modelo de red elástica.
+
+Aquí, probaremos la combinación de 10 valores diferentes para *alpha* y *lambda*. Esto se especifica mediante la opción `tuneLength`.
+
+Los mejores valores *alpha* y *lambda* son aquellos valores que minimizan el error de *cross-validation*.
+
+```{r regularization}
+
+  # Construimos el modelo 
+set.seed(13112020)
+model <- train(
+  salary ~., data = nba, method = "glmnet", # MÉTODO: Qué librería uso
+  trControl = trainControl("cv", number = 10),
+  tuneLength = 10 # Longitud de pasos para alpha
+)
+
+  # Seleccionamos el mejor alpha
+model$bestTune
+
+coef(model$finalModel, model$bestTune$lambda)
+
+```
+
+
+Como podemos observar el mejor *alpha* es 1, lo que nos da un modelo LASSO con un *lambda* de 0.06079296. En nuestro caso las variables seleccionadas serán:
+
+- nba_draft_number
+- age
+- mp
+- drb_percent
+- ws
+- dbpm
+
+***
+
+### Train, Validation and Test
+
+
+```{r Train, Validation and Test}
+
+  # Establecemos los datasets de train y test
+set.seed(13112020)
+training.samples <- nba$salary %>%
+  createDataPartition(p = 0.8, list = FALSE)
+train.data  <- nba[training.samples, ]
+test.data <- nba[-training.samples, ]
+
+# Para ello utilizaremos el paquete caret:
+
+  # Seleccionamos un intervalo para lambda:
+lambda <- 10^seq(-3, 3, length = 100)
+
+  # REGRESIÓN CRESTA:
+
+set.seed(13112020)
+ridge <- train(
+  salary ~., data = train.data, method = "glmnet",
+  trControl = trainControl("cv", number = 10),
+  tuneGrid = expand.grid(alpha = 0, lambda = lambda) #tunegrid, le dicimos cual es caso concreto (ridge para este)
+  )
+
+    # Coeficientes
+coef(ridge$finalModel, ridge$bestTune$lambda)
+
+    # Predicciones
+predictions <- ridge %>% predict(test.data)
+
+    # Performance
+data.frame(
+  RMSE = RMSE(predictions, test.data$salary),
+  Rsquare = R2(predictions, test.data$salary)
+)
+
+
+  # REGRESIÓN LASSO:
+
+set.seed(13112020)
+lasso <- train(
+  salary ~., data = train.data, method = "glmnet",
+  trControl = trainControl("cv", number = 10),
+  tuneGrid = expand.grid(alpha = 1, lambda = lambda) #Como es lasso le ponemos 1
+  )
+
+    # Coeficientes
+coef(lasso$finalModel, lasso$bestTune$lambda)
+
+    # Predicciones
+predictions <- lasso %>% predict(test.data)
+
+    # Performance
+data.frame(
+  RMSE = RMSE(predictions, test.data$salary),
+  Rsquare = R2(predictions, test.data$salary)
+)
+
+  # REGRESIÓN ESLASTIC NET:
+
+set.seed(13112020)
+elastic <- train(
+  salary ~., data = train.data, method = "glmnet",
+  trControl = trainControl("cv", number = 10),
+  tuneLength = 10
+  )
+
+    # Coeficientes
+coef(elastic$finalModel, elastic$bestTune$lambda)
+
+    # Predicciones
+predictions <- elastic %>% predict(test.data)
+
+    # Performance
+data.frame(
+  RMSE = RMSE(predictions, test.data$salary),
+  Rsquare = R2(predictions, test.data$salary)
+)
+
+
+  # COMPARAMOS LOS MODELOS:
+
+models <- list(ridge = ridge, lasso = lasso, elastic = elastic)
+resamples(models) %>% summary( metric = "RMSE")
+
+```
+
+El mejor modelo será aquel que tenga menor error en la predicción.
+

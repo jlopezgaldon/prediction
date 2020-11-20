@@ -1,0 +1,463 @@
+---
+title: "CP05"
+author: "Jose López Galdón"
+date: "`r Sys.Date()`"
+output:
+  prettydoc::html_pretty:
+    theme: cayman
+    highlight: github
+---
+
+
+```{r setup, include = FALSE, warning = FALSE}
+knitr::opts_chunk$set(include = FALSE, fig.width = 7, fig.height = 5, fig.align = "center", dpi = 500)
+```
+
+
+[//]: Librerías
+
+```{r Libraries}
+
+library(here) # Comentarios [//]:
+library(readxl) # Carga excel
+library(dplyr)
+library(magrittr) # Pipe operators %<>%
+library(xts) # Datos de series temporales (tiempo contínuo)
+library(zoo) # Formato zoo
+library(TSA)  # Análisis de dispersión
+library(forecast) # Modelos
+library(ggplot2)
+
+```
+
+## PLANTEAMIENTO
+
+En general, a los directores de marketing les gustaría conocer la efectividad de sus gastos en publicidad. El análisis de intervención proporciona una herramienta que puede ser útil para evaluar el impacto de las iniciativas que la empresa, los competidores o terceros pueden realizar en el mix de mercado. En esta caso práctico, consideramos la lucha por la cuota de mercado entre la crema dental Colgate de Colgate-Palmolive y la crema dental Crest de Procter y Gamble.
+
+Procter y Gamble introdujeron Crest en el mercado estadounidense en 1956. Antes de ese momento, Colgate disfrutaba de un liderazgo de mercado con una participación de mercado cercana al 50%. Durante los siguientes 4 años, Colgate siguió siendo un competidor dominante y Crest solo logró una participación de mercado relativamente modesta pero estable del 15%. Sin embargo, el 1 de agosto de 1960, el Consejo de Terapéutica Dental de la American Dental Association (ADA) aprobó a Crest como una “ayuda importante en cualquier programa de higiene dental”.
+
+Mientras tanto, Procter y Gamble revitalizaron su campaña de marketing para aprovechar el respaldo de la ADA, lo que dio como resultado un salto casi inmediato en la cuota de mercado de Crest en detrimento de la de Colgate.
+
+***
+***
+
+## OBJETIVO
+
+El objetivo es predecir las 16 semanas del año 1963, para las dos cuotas de mercado, por lo que se dejará fuera de la muestra este periodo muestral.
+
+El análisis debe incluir para las dos series la estimación de un modelo ARIMA, la detección de atípicos/outlier y un modelo de interveción. Por último se debe realizar un modelo de función de tranferencia entre las dos cuotas.
+
+***
+***
+
+[//]: ## CARGAMOS LOS DATOS
+
+```{r load data}
+
+raw_data <- read_excel("../data/01_raw/data.xlsx")
+
+```
+
+Comenzaremos visualizando los datos que tenemos, como podemos observar tenemos 4 columnas:
+
+- `Year`: Año
+- `Week`: Semana
+- `Crest`: Cuota de mercado para compañía Crest
+- `Colgate`: Cuota de mercado de Colgate.
+
+```{r view data, include = TRUE}
+
+head(raw_data, 10)
+
+```
+
+***
+***
+
+[//]: ## LIMPIEZA DEL DATASET
+
+[//]: ### Fechas
+
+<!-- Esto es un comentario -->
+
+<!-- Podemos observar que el primer problema que presenta nuestro dataset es que las fechas no están en el formato correcto, esto es porque tenemos una columna para el año (`Year`) y otra para la semana del año (`Week`). Para solucionar este problema crearemos un índice con esta información agrupada. -->
+
+```{r clean dates}
+
+  # Comenzamos creando una columna denominada "fecha" con la información del año y la semana en la que nos encontramos
+fecha <- seq(as.Date("1958-01-01"), as.Date("1963-04-15"), by = "week")
+
+  # Podemos comprobar que está bien haciendo la diferencia entre los elementos de "fechas" y el número de observaciones del df original
+length(fecha) - nrow(raw_data)
+
+```
+
+[//]: Una vez tenemos nuestro nuevo objeto `fecha` pasamos a tiempo continuo los datos:
+
+```{r xts_data}
+
+  # Primero eliminamos las columnas "Year" y "Week"
+raw_data %<>% select(-c(Year, Week))
+
+  # Aplicamos la función xts() con el objetivo de pasarlo a tiempo continuo
+data_crest <- xts(raw_data$Crest, order.by = fecha)
+data_colgate <- xts(raw_data$Colgate, order.by = fecha)
+
+  # Transformamos las fechas a formato semanal
+x_data_crest <- to.weekly(data_crest)
+x_data_colgate <- to.weekly(data_colgate)
+
+```
+
+[//]: Como en ciertos paquetes no funciona `xts()`, lo pasaremos a formato `zoo` con la librería `forecast` para no tener problemas:
+
+```{r zoo data}
+
+  # Seleccionaremos el precio de cierre de crest
+z_data_crest = as.zoo(x_data_crest$data_crest.Close)
+
+  # Cambiamos el nombre de la columna
+names(z_data_crest) <- "crest"
+
+
+  # Repteimos los mismos comandos para los datos de Colgate:
+    # Seleccionaremos el precio de cierre de crest
+z_data_colgate = as.zoo(x_data_colgate$data_colgate.Close)
+
+    # Cambiamos el nombre de la columna
+names(z_data_colgate) <- "colgate"
+
+
+```
+
+[//]: Ahora ya tenemos los datasets listos para trabajar!!
+
+***
+***
+
+## EDA
+
+Comenzaremos realizando un breve análisis exploratorio de los datasets.
+
+```{r market share plot, echo = FALSE, include = TRUE}
+
+  # Utilizamos la finción autoplot() para plotear la cuota de mercado a lo largo del tiempo
+autoplot(cbind(z_data_crest, z_data_colgate), facets = F) # facets = F para unir ambos datasets en un mismo plot
+
+```
+
+Gracias a este gráfico somos capaces de ver como se ha produciddo un cambio en la cuota de mercado de los dentífrico. Hasta mitades de 1960 se produce un cambio y vemos como COLGATE pierde la posición dominante en pro de CREST ¿Por qué?
+
+El 1 de agosto de 1960, el Consejo de Terapéutica Dental de la *American Dental Association* (ADA) aprobó a CREST como una “ayuda importante en cualquier programa de higiene dental”.
+
+Mientras tanto, *Procter y Gamble* revitalizaron su campaña de marketing para aprovechar el respaldo de la ADA, lo que dio como resultado un salto casi inmediato en la cuota de mercado de CREST en detrimento de la de COLGATE.
+
+Por lo tanto, podemos observar cómo se produce un cambio en la serie temporal.
+
+```{r tsdisplay}
+
+  # Para colgate
+ggtsdisplay(z_data_colgate)
+
+  # Para crest
+ggtsdisplay(z_data_crest)
+
+```
+
+[//]: Como podemos observar en ambos casos, los datos tienen un componente no estacionario. Parece ser que el cambio de la tendencia se produce al rededor de la semana 130. En ambos casos parece ser que el cambio que se produce tiene forma de escalón.
+
+[//]: Podemos transformar los datos a escala logarítmica para obtener una buena predicción
+
+```{r tsdisplay with log data}
+
+  # Definimos nuestro nuevo dataset
+z_data_log_crest <- log(z_data_crest)
+
+  # Realizamos el plot de la diferencia
+ggtsdisplay(diff(z_data_log_crest))
+
+
+  # Aplicamos lo mismo a colgate
+z_data_log_colgate <- log(z_data_colgate)
+
+ggtsdisplay(diff(log(z_data_colgate)))
+
+```
+
+[//]: De esta manera, observamos que en CREST existe una correlación parcial de 3 semanas, mientras que en COLGATE es de 4 semanas.
+
+***
+***
+
+## ARIMA
+
+Una vez tenemos claro que se produce un cambio en la serie temporal pasaremos a la predicción por el modelo ARIMA de ambas series. Uno de los objetivos de este análisis es predecir las 16 últimas semanas del año 1963, para ello dividiremos los datasets.
+
+```{r sub samples}
+
+# CREST
+
+  # Quitamos los 16 últimos datos, que son las 16 últimas semanas del año 1963
+c_omit = 16
+
+  # Tamaño del dataset
+n = length(z_data_log_crest)
+
+  # Creamos la sub muestra sin los 3 últimos cuatrimestres
+o_crest <- window(x = z_data_log_crest, 
+                    start = index(z_data_log_crest[1]),
+                    end = index(z_data_log_crest[n - c_omit]))
+
+
+# COLGATE
+  
+  # Tamaño del dataset
+n = length(z_data_log_colgate)
+
+  # Creamos la sub muestra sin los 3 últimos cuatrimestres
+o_colgate <- window(x = z_data_log_colgate, 
+                      start = index(z_data_colgate[1]),
+                      end = index(z_data_log_colgate[n - c_omit]))
+
+```
+
+### Crest
+
+Comenzamos con la compañía CREST
+
+```{r arima CREST, include = TRUE}
+
+arima_crest <- auto.arima(o_crest)
+
+summary(arima_crest)
+
+```
+
+Como podemos observar obtenemos el modelo de las líneas aéreas ARIMA(0, 1, 1), por lo tanto, vemos como es necesaria una diferenciación en la estacionariedad de la serie y la serie se ve influenciada por el periodo anterior. 
+
+```{r checking arima CREST}
+
+  # Comprobamos los residuos
+ggtsdisplay(arima_crest$residuals)
+
+  # Box-Ljung
+Box.test(arima_crest$residuals, lag = 3, fitdf = 1, type = "Lj")
+
+```
+
+<!-- Esto es un comentario -->
+
+<!--Comprobamos los residuos para ver si no introducen información el modelo (como están entre las líneas azules esta se cumple). También hemos realizado un test Box-Ljung y como el p-valor es muy superior al nivel de significancia no podemos rechazar la hipótesis nula de que es ruido blanco. -->
+
+```{r prediction CREST, echo = FALSE, include = TRUE}
+
+  # Realizamos la predicción del modelo
+pred_crest = forecast(arima_crest, h = 16)
+pred_crest
+
+autoplot(pred_crest, main = "Predicción ARIMA Crest") +
+  xlab("Fecha") +
+  ylab("Cuota Crest")
+
+```
+
+Obtenemos una precisión incorrecta debido al salto en la serie temporal.
+
+
+### Colgate
+
+Continuamos con la predicción para COLGATE.
+
+```{r arima COLGATE, include = TRUE}
+
+arima_colgate <- auto.arima(o_colgate)
+
+summary(arima_colgate)
+
+```
+
+Como podemos observar también obtenemos el modelo de las líneas aéreas ARIMA(0, 1, 1), por lo tanto, vemos como es necesaria una diferenciación en la estacionariedad de la serie y la serie se ve influenciada por el periodo anterior.
+
+```{r checking arima COLGATE}
+
+  # Comprobamos los residuos
+ggtsdisplay(arima_colgate$residuals)
+
+  # Box-Ljung
+Box.test(arima_colgate$residuals, lag = 4, fitdf = 1, type = "Lj")
+
+```
+
+[//]: Al realizar el test Box-Ljung vemos como el p-valor sigue siendo superior a 0.05 por lo que no rechazamos la hipótesis nula.
+
+```{r prediction COLGATE, echo = FALSE, include = TRUE}
+
+  # Realizamos la predicción del modelo
+pred_colgate = forecast(arima_colgate, h = 16)
+pred_colgate
+
+autoplot(pred_colgate, main = "Predicción ARIMA Colgate") +
+  xlab("Fecha") +
+  ylab("Cuota Colgate")
+
+```
+
+La predicción sale incorrecta debido a que tenemos un cambio en la serie temporal.
+
+***
+***
+
+## Detección de outliers
+
+Como tenemos problemas por culpa del cambio producido en la serie temporal (recordemos que se debe a que la ADA aprobó el 1 de Agosto de 1960 a Crest como una marca importante en cualquier tratamiento de higiene dental) comenzaremos analizando los *outliers* en la serie:
+
+A título teórico, sabemos que existen dos tipos de *outliers*:
+
+- **Aditivos (AO)**: Afectan a la serie temporal
+
+- **Innovativos (IO)**: Afectan al error
+
+```{r detect AO}
+
+  # Para ello, utilizaremos la función detectAO() del paquete TSA
+
+  # Outliers Aditivos para CREST
+detectAO(arima_crest)
+
+  # Outliers Aditivos para COLGATE
+detectAO(arima_colgate)
+
+```
+
+Tras realizar la prueba de detección de los **outliers aditivos** observamos que para Crest existe uno en el 136, sin embargo, no existe ninguno para Colgate. Este outlier se debe a la decisión tomada por el ADA el 1 de agosto de 1960.
+
+```{r detect IO}
+
+  # Para ello, utilizaremos la función detectIO() del paquete TSA
+
+  # Outliers Innovativos para CREST
+detectIO(arima_crest)
+
+  # Outliers Innovativos para COLGATE
+detectIO(arima_colgate)
+
+```
+
+En cuanto a los  **outliers innovativos** encontramos uno para Crest en el 99 y uno para Colgate en el 102, podría deberse a dos sucesos la crisis de los misiles en Cuba o la apertura del estadio de hockey de Colgate.
+
+***
+***
+
+## Modelo de intervención
+
+<!-- Esto es un comentario -->
+
+<!-- Comenzaremos una función de transferencia simple (criterio de parsimonia) de orden 0,0 incluyendo los respectivos outliers... -->
+
+```{r arimax CREST}
+
+  # Función arimax() del paquete TSA
+arimax_crest <- arimax(x = z_data_log_crest,                                           # Utilizamos nuestra base de datos con la transformación logarítmica
+                    order = c(0,1,1),                                                  # Establecemos el orden (0, 1, 1) obtenido del modelo arima
+                    xtransf = data.frame(agosto_60 = 1*(seq(z_data_log_crest) > 136)), # Indicamos la observación de la semana cuando se produce el reporte de la ADA
+                    xreg = data.frame(agosto_60 = 1*(seq(z_data_log_crest) == 136)),   # Incluimos el AO
+                    io = c(99),                                                        # Incluimos los io
+                    transfer = list(c(0,0)),                                           # Aplicamos una función de transferencia simple (0, 0) tal y como hemos comentado antes
+                    method = "ML")                                                     # En este caso, el método utilizado será el de Máxima Verosimilitud
+
+arimax_crest
+
+```
+```{r arimax COLGATE}
+
+  # Función arimax() del paquete TSA
+arimax_colgate <- arimax(x = z_data_log_colgate,                                       # Utilizamos nuestra base de datos con la transformación logarítmica
+                    order = c(0,1,1),                                                  # Establecemos el orden (0, 1, 1) obtenido del modelo arima
+                    xtransf = data.frame(agosto_60 = 1*(seq(z_data_log_crest) > 136)), # Indicamos la observación de la semana cuando se produce el reporte de la ADA
+                    io = c(102),                                                       # Incluimos los io
+                    transfer = list(c(0,0)),                                           # Aplicamos una función de transferencia simple (0, 0) tal y como hemos comentado antes
+                    method = "ML")                                                     # En este caso, el método utilizado será el de Máxima Verosimilitud
+
+arimax_colgate
+
+```
+
+### Predicción cuotas de mercado
+
+```{r prediction points CREST, echo = FALSE, include = TRUE}
+
+  # Mediante la función plot graficamos los valores reales de la cuota de mercado en escala logarítmica
+plot(o_crest, 
+     main = "Predicción cuota Crest", xlab = "Tiempo", ylab = "Cuota de mercado (log)") # Todo lo relativo a labels...
+
+  # Predicción del arimax
+points(fitted(arimax_crest), col = "tomato2")
+
+```
+
+Como podemos observar el modelo se ajusta correctamente a la serie temporal y tenemos la predicción para el año 1963. Podemos observar como la predeicción estima un ligero creciemiento a partir del 63, pero prácticamente constante.
+
+```{r prediction points COLGATE, echo = FALSE, include = TRUE}
+  
+  # Mediante la función plot graficamos los valores reales de la cuota de mercado en escala logarítmica
+plot(o_colgate, 
+     main = "Predicción cuota Colgate", xlab = "Tiempo", ylab = "Cuota de mercado (log)") # Todo lo relativo a labels...
+
+  # Predicción del arimax
+points(fitted(arimax_colgate), col = "turquoise3")
+
+```
+
+En el caso de Colgate el modelo también se ajusta bastante a la serie temporal, y vemos como la predicción es que siga perdiendo cuota...
+
+***
+***
+
+## Función de transferencia
+
+Si queremos estudiar el impacto de la noticia de ADA en Colgate, utilizaremos la función de trasferencia.
+
+<!-- Esto es un comentario -->
+
+<!-- Para ello, generaremos un punto de corte en la observación (semana) anterior a la publicación de la ADA, para cuantificar la diferencia entre ellas... -->
+
+```{r differeces before ADA}
+
+  # Primero generamos una ventana hasta la observación anterior a la decisión de la ADA, recordemos que es la 136
+o_crest135 <- window(o_crest, end = 135) 
+o_colgate135 <- window(o_colgate, end = 135) 
+
+  # Generamos las diferencias
+o_crest135_D <- diff(o_crest135) 
+o_colgate135_D <- diff(o_colgate135) 
+
+```
+
+[//]: Una vez tenemos las diferencias ya podemos calcular la función de transferencia.
+
+```{r tranfer}
+transfer <-  arimax(o_crest135_D,        # Utilizamos nuestra base de datos con la diferencia
+             order = c(0,1,1),           # Establecemos el orden (0, 1, 1) obtenido del modelo arima
+             include.mean = TRUE,       
+             xtransf = o_colgate135_D,   # Indicamos la diferencia con crest
+             transfer = list(c(0,0)),    # Aplicamos una función de transferencia simple (0, 0) tal y como hemos comentado antes
+             method = "ML")              # En este caso, el método utilizado será el de Máxima Verosimilitud
+
+transfer$coef
+
+```
+Tras observar los coeficientes, vemos que son negativos, lo que nos lleva a concluir que el impacto de Crest sobre Colgate es negativo.
+
+***
+***
+
+## CONCLSUIONES
+
+- El negocio de las pastas dentríficas no es estacional ni estacionario.
+
+- La noticia publicada el 1 de agosto de 1960, por el Consejo de Terapéutica Dental de la *American Dental Association (ADA)* aprobando a Crest como una “ayuda importante en cualquier programa de higiene dental” influyó tanto en la cuota de mercado de Crest como en la del Colgate.
+
+- Por último, se ha demostrado mediante la función de transferencia que es negativa, que el incremento de la cuota de mercado en Crest produjo un efecto negativo en el Colgate.
+
+
+
