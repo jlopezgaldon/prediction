@@ -1,0 +1,374 @@
+---
+title: "Your Document Title"
+author: "Document Author"
+date: "`r Sys.Date()`"
+output:
+  prettydoc::html_pretty:
+    theme: cayman
+    highlight: github
+---
+
+```{r setup, include = FALSE, warning = FALSE}
+knitr::opts_chunk$set(fig.width = 7, fig.height = 5, fig.align = "center", dpi = 500, warning = FALSE)
+```
+
+
+[//]: Librerías
+
+```{r Libraries, include = FALSE}
+
+library(here) # Comentarios [//]:
+library(quantmod) # Paquete para cargar los datos desde yahoo finance
+library(forecast) # Predicciones
+library(fGarch) # Modelos GARCH
+library(vars) # Modelos VAR
+
+```
+
+[//]: ## CARGAMOS LOS DATOS
+
+```{r load data, include = FALSE}
+
+  # Cargamos los datos de BMW
+
+sSymbol <- "BMW.DE"
+
+bmw_data <- getSymbols(sSymbol ,from = "2014-01-01", to = "2020-11-01", auto.assign = FALSE)
+
+  # Cargamos los datos de volkswagen
+
+sSymbol <- "VOW.DE"
+
+vow_data <- getSymbols(sSymbol ,from = "2014-01-01", to = "2020-11-01", auto.assign = FALSE)
+
+```
+
+
+Comenzaremos visualizando los datos que tenemos:
+
+```{r view data}
+
+  # Para visualizar la cotización de los activos utilizaremos la función barChart()
+
+  # BMW:
+barChart(bmw_data, theme = "white.mono")
+
+  # Volkswagen:
+barChart(vow_data, theme = "white.mono")
+
+```
+
+En el gráfico de Volkswagen, podemos ver claramente el efecto del **diseslgate**: *En septiembre de 2015 salió a la luz que Volkswagen había instalado ilegalmente un software para alterar los resultados de los controles técnicos de emisiones contaminantes en 11 millones de automóviles con motor diésel, vendidos entre 2009 y 2015. Como resultado de este fraude, sus motores habían superado con creces los estándares de la Agencia de Protección Ambiental de Estados Unidos (EPA). Los vehículos implicados emiten en condiciones reales hasta 40 veces el límite legal de óxidos de nitrógeno.*
+
+***
+***
+
+## Estimar el modelo garch de BMW
+
+```{r define work data & calculate daily continious return}
+
+  # Definimos nuestro dataset con los precios
+bmw_x_data <- Ad(bmw_data)
+
+  # Calculamos el retorno diario contínuo, para ello establecemos el logarítmo
+ret_diar_bmw <- dailyReturn(bmw_x_data, type = 'log', leading = FALSE)
+
+```
+Una vez temos nuestro dataset con el retorno diario contínuo, eliminamos los valores nulos...
+
+```{r drop na values}
+
+ret_diar_bmw <- na.exclude(ret_diar_bmw)
+
+```
+
+### PRECIO Y RENTABILIDAD DE BMW
+
+Como el objetivo es estudiar la rentabilidad y el precio de las acciones de BMW, a continuación realizaremos un gráfico con el precio y la rentabilidad del activo.
+
+```{r plot rend}
+
+  # Para evitar problemas, pasamos a zoo el archivo y ploteamos el precio y los rendimientos
+plot.zoo(cbind(bmw_x_data,ret_diar_bmw), 
+         main = "BMW y Rentabilidad", xlab = "Años", ylab = c("Precio", "Rentabilidad"))
+grid(lwd = 2)
+
+```
+
+Como podemos observar tenemos dos caídas importantes en el precio de la acción de BMW, el primero fue durante el *dieselgate* lo que genero "ruido" en la rentabilidad. Entre 2016 y 2018 la compañía experimentó un crecimiento, lo que produjo una cierta estabilidad en la rentabilidad, pero a partir del 2018 se preodujo una caída sostenida: *“El sector del automóvil se contrajo en 2018 por primera vez desde la crisis financiera, contribuyendo así desde el año pasado al debilitamiento del crecimiento global”, asegura el Fondo Monetario Internacional (FMI) en el documento publicado este martes.*
+
+*Dos gráficos registran a la perfección esta tendencia. Tanto el número de vehículos producidos como el de pasajeros ha aumentado de forma continuada desde 2010. Si a principios de siglo la fabricación de coches en todo el mundo no llegaba a los 60 millones, en 2017 se acercó a los 95. Pero desde entonces tanto el número de vehículos producidos como su valor en dólares han retrocedido ligeramente.*
+
+*El Fondo atribuye este retroceso a dos factores: el fin de las rebajas de impuestos en China, que hasta entonces se habían usado para favorecer la expansión de la clase media a través del vehículo en propiedad, y las nuevas pruebas de emisiones realizadas en Europa.*
+
+Por último, podemos observer el efecto del coronavirus en el año 2020, y como supuso una fuerte caída para el precio de las acciones y un gran ruido en la rentabilidad.
+
+***
+
+### PRECIO, RENTABILIDAD Y VOLATILIDAD
+
+A continuación, hemos realizado el mismo gráfico que el anterior per añadiendo la volatilidad.
+
+```{r plot volatility}
+
+  # Para el cálculo de la volatilidad utilizamos la rentabilidad al cuadrado
+plot.zoo(cbind(bmw_x_data, ret_diar_bmw, ret_diar_bmw^2), 
+         main = "BMW", 
+         xlab = "Años", ylab = c("Precio", "Rentabilidad", "Volatilidad"))
+```
+
+De una manera intuitiva, la volatilidad es una medida de cuánto la rentabilidad fluctúa alrededor de su media. Es una medida del riesgo.
+
+Por lo tanto, es importante, poder calcular esta volatilidad en cualquier instante, para analizar cómo varía con el tiempo y para predecir sus valores futuros.
+
+Vemos como durante el los años ha habido ligeros aumentos de la volatilidad en el rendimiento de BMW pweo nada equiparable al causado por el covid.
+
+
+Como hemos comentado antes, una estimación de la volatilidad es el rendimiento al cuadrado, para ello comprobaremos si es ruido blanco:
+
+```{r ACF & PCF volatility}
+
+  # Definimos la volatilidad
+vol_bmw <- ret_diar_bmw^2
+
+  # Observamos si es ruido blanco
+tsdisplay(vol_bmw)
+
+```
+
+Vemos como la volatilidad no es ruido blanco...
+
+***
+***
+
+### MODELOS GARCH
+
+A título teórico, comenzaeremos con un modelo ARCH(1), estos modelos no son muy buenos en finanzas
+
+```{r bmw ARCH(1)}
+
+  # Generamos un modelo ARCH(1)
+bmw_arch <- garchFit(~ 1 + garch(1, 0), data = ret_diar_bmw, trace = F)
+
+summary(bmw_arch)
+
+  # Definimos los residuos
+resi <- residuals(bmw_arch, standardize = T)
+
+  # Creamos los residuos como xts ordenados
+resi <- xts(resi,order.by = index(ret_diar_bmw))
+
+  # ACF & PCF
+tsdisplay(resi^2)
+
+```
+
+No podemos rechazar ninguna de las hipótesis nulas, por lo que no vamos en buen camino. Probaremos con un garch(1, 1)
+
+```{r bmw GARCH(1, 1)}
+
+  # Generamos un modelo GARCH(1, 1)
+bmw_garch <- garchFit(~ 1 + garch(1, 1), data = ret_diar_bmw, trace = F)
+
+summary(bmw_garch)
+
+  # Definimos los residuos
+resi <- residuals(bmw_garch, standardize = T)
+
+  # Creamos los residuos como xts ordenados
+resi <- xts(resi,order.by = index(ret_diar_bmw))
+
+  # ACF & PCF
+tsdisplay(resi^2)
+
+  # plots
+#plot(bmw_garch)
+
+```
+
+Podemos rechazar algua hipótesis nula, pero el LM ARCH aún no, por lo que debemos incorporar un modelo arma, para ello calcularemos con `auto.arima`
+
+```{r auto arima}
+
+bmw_arima <- auto.arima(ret_diar_bmw)
+
+summary(bmw_arima)
+
+```
+
+Ahora sabemos que tenemos que utilizar un arma(3, 1)
+
+```{r arma(3,1) & garch(2, 2)}
+
+  # Generamos un modelo ARMA(3, 1) & GARCH(2, 2)
+bmw_garch_ar <- garchFit(~ arma(3, 1) + garch(2, 2), data = ret_diar_bmw, trace = F)
+
+summary(bmw_garch_ar)
+
+  # Definimos los residuos
+resi <- residuals(bmw_garch_ar, standardize = T)
+
+  # Creamos los residuos como xts ordenados
+resi <- xts(resi,order.by = index(ret_diar_bmw))
+
+  # ACF & PCF
+tsdisplay(resi^2)
+
+```
+
+Ahora si tenemos el modelo correcto!
+
+***
+***
+
+### Volatilidad de BMW
+
+```{r volatility}
+
+  # Calculamos la volatilidad 
+vol_bmw <- volatility(bmw_garch)
+
+  # La pasamos a un xts
+vol_bmw <- xts(vol_bmw, order.by = index(ret_diar_bmw))
+
+  # Graficamos el resultdo, utilizamos la raíz de 252 porque es el número de días de un año bursátil
+plot(sqrt(252) * vol_bmw)
+
+```
+
+Podemos observar de manera clara, como aumentó la volatilidad entre el 2014 y el 2016 debido al *diselgate* y como en marzo de 2020 se disparó el riesgo debido a la situaciónd de incertidumbre que vivimos durante el covid.
+
+```{r residuals}
+
+  # Calculamos los residuos
+resi=residuals(bmw_garch, standardize = T)
+
+  # Los convertimos a un objeto xts
+resi=xts(resi, order.by = index(ret_diar_bmw))
+
+   # ACF & PCF
+tsdisplay(resi^2)
+
+  # Graficamos los residuos
+plot(resi)
+
+```
+
+### PREDICCIÓN
+
+Dado que la predicción no funciona correctamente con el mejor modelo arma(3, 1) garch(2, 2) realizaremos la predicción con el garch(1, 1)
+
+```{r prediction}
+
+  # Calculamos la predicción
+predict(bmw_garch)
+
+```
+
+A continuación, graficaremos el intervalo de confianza de la volatilidad.
+
+```{r plot full prediction}
+
+  # Ploteamos la predicción estableciendo el criterio de 2 veces el error estándar
+predict(bmw_garch, n.ahead = 10, plot = TRUE, crit_val = 2)
+
+```
+
+Como podemos observar, tenemos el efecto del coronavirus antes de index = 300, llegando a valores de casi el 15%, lo que supone una alta incertidumbre, pero según nuestra previsión podemos estar en los valores de antes de marzo, por lo que hemos experimentado una reducción de la volatilidad.
+
+Para ver esto más claro, hemos decidido realizar el mismo gráfico pero a 180 días y con un intervalo de confianza del 90%
+
+```{r prediction with the last 180 days}
+
+  # Ploteamos la predicción estableciendo unos intervalos de confianza del 90% y 180 días
+predict(bmw_garch, n.ahead = 20, plot = TRUE, conf = .9, nx = 180)
+
+```
+
+De esta manera, podemos observar como se ha reducido de manera considerable la volatilidad del activo y establecemos unas bandas de fluctuación entre el -0.03 y el 0.03.
+
+***
+***
+
+## Plantear un modelo VAR mensual entre los dos activos
+
+```{r to monthly}
+
+  # Pasamos a mensual seleccionando el precio ajustado, es decir, la columna 6
+rBmw <- monthlyReturn(bmw_data[, 6])
+  
+  # Pasamos a mensual seleccionando el precio ajustado, es decir, la columna 6
+rVow <- monthlyReturn(vow_data[, 6])
+
+```
+Como podemos observar en las bases de datos, pasamos de mes en mes, en vez de ser diario. El siguiente paso es generar un vector con la información de los activos:
+
+```{r BMW & Volkswagen columns}
+
+  # Generamos nuestro vector
+vY <- cbind(rBmw, rVow)
+colnames(vY) <- c("BMW", "Volkswagen")
+
+  # Ploteamos el precio mensual
+autoplot(vY, facets = F)
+
+```
+
+Como podemos observar, ambos activos fluctuan de manera muy siimilar, sin embargo, vemos como a finales del 2015 el efecto del *dieselgate* afectó mucho más a Volkswagen que a BMW.
+
+***
+
+### Selección del modelo
+
+Dado que la serie no es estacionaria realizamos la transformación...
+
+```{r diff model}
+
+  # Volvemos a cargar los datos para evitar problemas
+getSymbols('BMW.DE', from='2014-01-01', to='2020-11-01', warnings = F)
+getSymbols('VOW.DE', from='2014-01-01', to='2020-11-01', warnings = F)
+
+  # Realizamos la transformación
+bmw_ret <- diff(log(Ad(BMW.DE))) 
+vow_ret <- diff(log(Ad(VOW.DE)))
+
+  # Utilizamos la columna del precio ajustado
+bmw_ret <- to.monthly(bmw_ret)$bmw_ret.Close
+vow_ret <- to.monthly(vow_ret)$vow_ret.Close
+
+  # Generamos nuestro vector
+vY <- cbind(bmw_ret, vow_ret)
+colnames(vY) <- c("BMW","Volkswagen") #le ponemos nombres
+
+  # Omitimos los na
+vY <- na.omit(vY)
+
+```
+
+```{r select VAR}
+
+VARselect(vY)
+
+```
+
+Estimamos con el modelo
+
+```{r VAR}
+
+modelo <- VAR(vY)
+
+summary(modelo)
+
+```
+
+Calculamos la causalidad de granger:
+
+```{r granger causality}
+
+causality(modelo)
+
+```
+
+Tras realizar el test de causalidad no podemos rechazar la hipótesis nula de NO causalidad, por lo que no tiene sentido continuar...
+
+
