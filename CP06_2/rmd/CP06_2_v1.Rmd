@@ -1,0 +1,191 @@
+---
+title: "CP06_2"
+author: "Jose López Galdón"
+date: "`r Sys.Date()`"
+output:
+  prettydoc::html_pretty:
+    theme: cayman
+---
+
+```{r setup, include = FALSE, warning = FALSE}
+knitr::opts_chunk$set(fig.width = 7, fig.height = 5, fig.align = "center", dpi = 500, warning = FALSE)
+```
+
+
+[//]: Librerías
+
+```{r Libraries, include = FALSE}
+
+library(here) # Comentarios [//]:
+library(quantmod) # Paquete para cargar los datos desde yahoo finance
+require(devtools)
+install_version("PairTrading", version = "1.1", repos = "http://cran.us.r-project.org") # Versión específica del paquete
+library(PairTrading)
+library(urca)
+library(dplyr)
+
+```
+
+[//]: ## CARGAMOS LOS DATOS
+
+```{r load data, include = FALSE}
+
+  # Cargamos los datos de BMW
+
+sSymbol <- "BMW.DE"
+
+bmw_data <- getSymbols(sSymbol ,from = "2014-01-01", to = "2020-11-01", auto.assign = FALSE)
+
+  # Cargamos los datos de volkswagen
+
+sSymbol <- "VOW.DE"
+
+vow_data <- getSymbols(sSymbol ,from = "2014-01-01", to = "2020-11-01", auto.assign = FALSE)
+
+```
+
+
+Comenzaremos visualizando los datos que tenemos:
+
+```{r view data}
+
+  # Para visualizar la cotización de los activos utilizaremos la función barChart()
+
+  # BMW:
+barChart(bmw_data, theme = "white.mono")
+
+  # Volkswagen:
+barChart(vow_data, theme = "white.mono")
+
+```
+
+En el gráfico de Volkswagen, podemos ver claramente el efecto del **diseslgate**: *En septiembre de 2015 salió a la luz que Volkswagen había instalado ilegalmente un software para alterar los resultados de los controles técnicos de emisiones contaminantes en 11 millones de automóviles con motor diésel, vendidos entre 2009 y 2015. Como resultado de este fraude, sus motores habían superado con creces los estándares de la Agencia de Protección Ambiental de Estados Unidos (EPA). Los vehículos implicados emiten en condiciones reales hasta 40 veces el límite legal de óxidos de nitrógeno.*
+
+***
+***
+
+## COINTEGRACIÓN
+
+El análisis de series temporales se encuentra con un problema al medir las relaciones entre aquellas variables que tienen una tendencia temporal.
+
+Este problema puede llegar a que se consideren significativas relaciones completamente espurias.
+
+Las variables que tienen una tendencia temporal definida se denominan “no estacionarias”.
+
+Las estimaciones de regresiones con variables no estacionarias son espurias salvo que estas estén cointegradas.
+
+Dos variables no estacionarias cointegradas son aquellas cuyos residuos son estacionarios.
+
+Si los residuos son estacionarios las estimaciones de variables no estacionarias son superconsistentes.
+
+
+```{r create data}
+
+  # Unimos los dos dtasets con los precios ajustados
+pair_trade <- cbind(bmw_data$BMW.DE.Adjusted, vow_data$VOW.DE.Adjusted)
+
+  # Eliminamos los na en ambas series
+pair_trade <- na.exclude(pair_trade)
+
+  # Comprobamos el resultado
+head(pair_trade)
+
+```
+
+### ¿Son estacionarias?
+
+```{r}
+
+  # Para BMW
+adf.test(pair_trade[, 1],k = 0)
+
+  # Para volkswagen
+adf.test(pair_trade[, 2],k = 0)
+
+```
+
+
+Como el p-value es mayor que el nivel de significancia no podemos rechazar la hipótesis nula, por lo tanto, ambas series son estacionarias, es por ello, por lo que tendremos que calcular las diferencias necesarias.
+
+```{r Augmented Dickey-Fuller Test Unit Root Test no tend}
+
+  # Calculamos el test para bmw sin tendencia por AIC y con 10 lags
+test_notrend <- ur.df(pair_trade[, 1], type = "none", selectlags = "AIC", lags = 10)
+summary(test_notrend)
+
+```
+
+Vemos como necesita una diferencia. Ahora probaremos con tendencia:
+
+```{r Augmented Dickey-Fuller Test Unit Root Test tend}
+
+  # Calculamos el test para bmw sin tendencia por AIC y con 10 lags
+test_trend <- ur.df(pair_trade[, 1], type = "trend", selectlags = "AIC", lags = 10)
+summary(test_trend)
+
+```
+Los valores de los estadísticos son -3.3434, 3.8025 y 5.6981, por lo que estamos en H0.
+
+***
+
+### Estimamos parámetros
+
+```{r plot reg}
+
+  # Estimamos los parámetros por el método lineal
+reg <- EstimateParameters(pair_trade, method = lm)
+
+  # Observamos el objeto creado
+str(reg)
+
+  # Ploteamos
+plot(reg$spread)
+
+```
+
+En el plot el 0 es el equilibrio, es decir, van a la par los precios, tenemos que ver si esto ocurre o no en el futuro.
+
+***
+
+### Comprobación estacionaria
+
+Ahora vamos a comprobar si es estacionaria o no:
+
+```{r stationary}
+
+IsStationary(reg$spread, 0.1)
+
+```
+
+Ambos test nos indican que no es estacionaria, por lo que podemos continuar.
+
+***
+
+### Estrategia mercado
+
+```{r}
+# Estimamos los parámetros para el test
+params <- EstimateParametersHistorically(pair_trade, period = 180)
+
+# Creamos la señal
+signal <- Simple(params$spread, 0.05) # Cuando debo entrar y salir
+
+  # Cuando el cuadro azul está hacia arriba estás dentro de la estrategia
+plot(params$spread)
+
+
+par(new=TRUE)
+
+barplot(signal, col = "seagreen3", space = 0, border = "seagreen3", xaxt = "n", yaxt = "n", xlab = "", ylab = "")
+
+```
+
+De esta manera podemos observar cuando estamos dentro y fuera de la estrategia. 
+
+***
+***
+
+## CONCLUSIÓN
+
+Ambas variables están cointegradas.
+
