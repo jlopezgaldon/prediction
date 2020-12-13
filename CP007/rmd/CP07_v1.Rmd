@@ -1,0 +1,172 @@
+---
+title: "CP07"
+author: "Jose López Galdón"
+date: "`r Sys.Date()`"
+output:
+  prettydoc::html_pretty:
+    theme: cayman
+---
+
+```{r setup, include = FALSE, warning = FALSE}
+knitr::opts_chunk$set(fig.width = 7, fig.height = 5, fig.align = "center", dpi = 500, warning = FALSE)
+```
+
+
+[//]: Librerías
+
+```{r Libraries, include = FALSE}
+
+library(here) # Comentarios [//]:
+library(quantmod) # Paquete para cargar los datos desde yahoo finance
+library(dplyr) # Limpieza y selección de variables
+library(tidyr) # Limpieza y selección de variables
+library(ggplot2) # Visualización
+library(xts) # Transformar los datos a formato xts
+library(CausalImpact) # Paquete de Google
+
+```
+
+[//]: ## CARGAMOS LOS DATOS
+
+```{r load data, include = FALSE}
+
+  # Cargamos los datos de BMW
+
+sSymbol <- "BMW.DE"
+
+bmw_data <- getSymbols(sSymbol ,from = "2014-01-01", to = "2020-11-01", auto.assign = FALSE)
+
+  # Cargamos los datos de volkswagen
+
+sSymbol <- "VOW.DE"
+
+vow_data <- getSymbols(sSymbol ,from = "2014-01-01", to = "2020-11-01", auto.assign = FALSE)
+
+```
+
+
+Comenzaremos visualizando los datos que tenemos:
+
+```{r view data}
+
+  # Para visualizar la cotización de los activos utilizaremos la función barChart()
+
+  # BMW:
+barChart(bmw_data, theme = "white.mono")
+
+  # Volkswagen:
+barChart(vow_data, theme = "white.mono")
+
+```
+
+En el gráfico de Volkswagen, podemos ver claramente el efecto del **diseslgate**: *En septiembre de 2015 salió a la luz que Volkswagen había instalado ilegalmente un software para alterar los resultados de los controles técnicos de emisiones contaminantes en 11 millones de automóviles con motor diésel, vendidos entre 2009 y 2015. Como resultado de este fraude, sus motores habían superado con creces los estándares de la Agencia de Protección Ambiental de Estados Unidos (EPA). Los vehículos implicados emiten en condiciones reales hasta 40 veces el límite legal de óxidos de nitrógeno.*
+
+***
+***
+
+## CAUSAL IMPACT
+
+En nuestro caso tenemos distintos precios en ambos datasets, lo que haremos será eliminar los nulos para no obtener fallos y trabajaremos sobre el precio ajustado
+
+```{r drop NaN and create series}
+
+  # Unimos los dos dtasets con los precios ajustados
+serie <- cbind(bmw_data$BMW.DE.Adjusted, vow_data$VOW.DE.Adjusted)
+
+  # Eliminamos los na en ambas series
+serie <- na.exclude(serie)
+
+  # Comprobamos el resultado mediante un autoplot
+colnames(serie) <- c("BMW", "Volkswagen")
+autoplot(serie, facet = NULL) + xlab("") + ylab("Precio de Cierre Ajustado")
+
+```
+
+En este caso podemos visualizar ambos precios de cierre ajustados, y cómo en 2015 tiene el efecto el dieselgate sobre Volkswagen, por lo tanto, tendremos que definir el periodo pre-dieselgate y el periodo post:
+
+```{r max and mins from Volkswagen, include = FALSE}
+
+  # Observamos cuál es el máximo
+which.max(serie[,2])
+serie[304, 2]
+
+  # Observamos cuál es el mínimo
+which.min(serie[, 2])
+serie[444, 2]
+
+```
+
+Como podemos observar el efecto del dieselgate se produjo desde mediados de marzo del 2015 hasta principios de octubre de ese mismo año. Sin emabrgo el escándolo no salió a la luz hasta mediados de septiembre, en concreto el 18, por lo que usaremos esa fecha como punto de inflexión.
+
+```{r pre and post dates}
+
+  # Definimos el periodo pre-dieselgate y post
+pre_dieselgate <- as.Date(c("2014-01-02", "2015-09-18"))
+post_dieselgate <- as.Date(c("2015-09-21", "2020-10-30"))
+
+```
+
+### Estimación Volkswagen
+
+```{r CausalImpact VOlkswagen}
+
+  # Estimamos el modelo con causalImpact
+volkswagen_causal <- CausalImpact(serie[, 2], pre.period = pre_dieselgate,  post.period = post_dieselgate)
+
+  # Resumen y plots
+summary(volkswagen_causal)
+plot(volkswagen_causal)
+
+```
+
+```{r automatic report VOW}
+
+  # Informe automático
+summary(volkswagen_causal, "report")
+
+```
+
+*Durante el período posterior a la intervención, la variable de respuesta tuvo un valor promedio de aprox. 135,89. En ausencia de una intervención, hubiéramos esperado una respuesta promedio de 146,86. El intervalo del 95% de esta predicción contrafactual es [53,51, 244,38]. Al restar esta predicción de la respuesta observada se obtiene una estimación del efecto causal que tuvo la intervención sobre la variable de respuesta. Este efecto es -10,98 con un intervalo del 95% de [-108,50, 82,38]. Para una discusión sobre la importancia de este efecto, vea a continuación.*
+
+*Al resumir los puntos de datos individuales durante el período posterior a la intervención (que solo a veces se puede interpretar de manera significativa), la variable de respuesta tuvo un valor general de 176.11K. Si la intervención no hubiera tenido lugar, hubiéramos esperado una suma de 190,33 mil. El intervalo del 95% de esta predicción es [69,35 K, 316,72 K].*
+
+*Los resultados anteriores se dan en términos de números absolutos. En términos relativos, la variable respuesta mostró una disminución del -7%. El intervalo del 95% de este porcentaje es [-74%, + 56%].*
+
+*Esto significa que, aunque puede parecer que la intervención ha ejercido un efecto negativo sobre la variable de respuesta cuando se considera el período de intervención en su conjunto, este efecto no es estadísticamente significativo y, por lo tanto, no puede interpretarse de manera significativa. El efecto aparente podría ser el resultado de fluctuaciones aleatorias que no están relacionadas con la intervención. Este suele ser el caso cuando el período de intervención es muy largo e incluye gran parte del tiempo cuando el efecto ya ha desaparecido. También puede ocurrir cuando el período de intervención es demasiado corto para distinguir la señal del ruido. Finalmente, no encontrar un efecto significativo puede ocurrir cuando no hay suficientes variables de control o cuando estas variables no se correlacionan bien con la variable de respuesta durante el período de aprendizaje.*
+
+*La probabilidad de obtener este efecto por azar es p = 0,407. Esto significa que el efecto puede ser falso y, en general, no se consideraría estadísticamente significativo.*
+
+***
+
+### Estimación BMW
+
+```{r CausalImpact bmw}
+
+  # Estimamos el modelo con causalImpact
+bmw_causal <- CausalImpact(serie[, 1], pre.period = pre_dieselgate,  post.period = post_dieselgate)
+
+  # Resumen y plots
+summary(bmw_causal)
+plot(bmw_causal)
+
+```
+
+```{r automatic report bmw}
+
+  # Informe automático
+summary(bmw_causal, "report")
+
+```
+
+*Durante el período posterior a la intervención, la variable de respuesta tuvo un valor promedio de aprox. 66,58. En ausencia de una intervención, hubiéramos esperado una respuesta promedio de 68,32. El intervalo del 95% de esta predicción contrafactual es [27,88, 110,47]. Al restar esta predicción de la respuesta observada se obtiene una estimación del efecto causal que tuvo la intervención sobre la variable de respuesta. Este efecto es -1,74 con un intervalo del 95% de [-43,89, 38,71]. Para una discusión sobre la importancia de este efecto, vea a continuación.*
+
+*Al resumir los puntos de datos individuales durante el período posterior a la intervención (que solo a veces se puede interpretar de manera significativa), la variable de respuesta tuvo un valor general de 86.29K. Si la intervención no hubiera tenido lugar, hubiéramos esperado una suma de 88.54K. El intervalo del 95% de esta predicción es [36,13 K, 143,17 K].*
+
+*Los resultados anteriores se dan en términos de números absolutos. En términos relativos, la variable respuesta mostró una disminución del -3%. El intervalo del 95% de este porcentaje es [-64%, + 57%].*
+
+*Esto significa que, aunque puede parecer que la intervención ha ejercido un efecto negativo sobre la variable de respuesta cuando se considera el período de intervención en su conjunto, este efecto no es estadísticamente significativo y, por lo tanto, no puede interpretarse de manera significativa. El efecto aparente podría ser el resultado de fluctuaciones aleatorias que no están relacionadas con la intervención. Este suele ser el caso cuando el período de intervención es muy largo e incluye gran parte del tiempo cuando el efecto ya ha desaparecido. También puede ocurrir cuando el período de intervención es demasiado corto para distinguir la señal del ruido. Finalmente, no encontrar un efecto significativo puede ocurrir cuando no hay suficientes variables de control o cuando estas variables no se correlacionan bien con la variable de respuesta durante el período de aprendizaje.*
+
+*La probabilidad de obtener este efecto por azar es p = 0,458. Esto significa que el efecto puede ser falso y, en general, no se consideraría estadísticamente significativo.*
+
+***
+***
